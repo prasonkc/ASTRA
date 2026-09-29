@@ -1,0 +1,150 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - heading "P R A S O N K C" [level=1] [ref=e7]:
+        - generic [ref=e8]: P
+        - generic [ref=e9]: R
+        - generic [ref=e10]: A
+        - generic [ref=e11]: S
+        - generic [ref=e12]: O
+        - generic [ref=e13]: "N"
+        - generic [ref=e15]: K
+        - generic [ref=e16]: C
+      - generic [ref=e17]: Full Stack Developer
+      - generic [ref=e18]:
+        - link "View Work" [ref=e19] [cursor=pointer]:
+          - /url: "#work"
+        - link "Get in Touch" [ref=e21] [cursor=pointer]:
+          - /url: "#contact"
+    - generic [ref=e30]:
+      - heading "About Me" [level=2] [ref=e31]
+      - paragraph [ref=e32]: Hey there. I'm a creative developer who loves writing codes. Sometimes it works perfectly, and sometimes it doesn't. My IDE probably knows more about my life than my social media. I break my system and fix it for fun, and I love building things people didn't know they needed… until they do.
+      - paragraph [ref=e33]: I primarily work with React, Next js and/or Express to build interactive web applications. I like to imagine I store people's texts in free-tier databases… and sometimes they get mad when I "reply late." I drink Monster while debugging my code, and I'm starting to worry I might actually turn into one. When I'm not building web apps, I might be writing a 1000-line Java program that throws a 200-line error, experimenting with side projects, or going outside to convince my plants to grow faster.
+      - paragraph [ref=e34]: "\"Send Help\""
+    - generic [ref=e36]:
+      - heading "Skills & Expertise" [level=2] [ref=e37]
+      - generic [ref=e38]:
+        - generic [ref=e39]:
+          - heading "Programming Languages" [level=3] [ref=e40]
+          - generic [ref=e41]:
+            - paragraph [ref=e46]: JavaScript
+            - paragraph [ref=e52]: Java
+            - paragraph [ref=e58]: Python
+            - paragraph [ref=e64]: C/C++
+            - paragraph [ref=e70]: SQL
+        - generic [ref=e72]:
+          - heading "Frameworks & Libraries" [level=3] [ref=e73]
+          - generic [ref=e74]:
+            - paragraph [ref=e79]: React
+            - paragraph [ref=e85]: Next.js
+            - paragraph [ref=e91]: Node.js
+            - paragraph [ref=e97]: Express.js
+            - paragraph [ref=e103]: TailwindCSS
+            - paragraph [ref=e109]: MongoDB
+        - generic [ref=e111]:
+          - heading "Tools & OS" [level=3] [ref=e112]
+          - generic [ref=e113]:
+            - paragraph [ref=e118]: Postman
+            - paragraph [ref=e124]: Git
+            - paragraph [ref=e130]: Linux
+    - generic [ref=e137]:
+      - heading "Projects" [level=2] [ref=e138]
+      - generic [ref=e139]:
+        - generic [ref=e143]:
+          - generic [ref=e144]:
+            - heading "Cryptrum" [level=3] [ref=e145]
+            - generic [ref=e146]: "2026"
+          - paragraph [ref=e147]: The internet's encrypted and secure forum with many features(DEMO).
+          - generic [ref=e148]:
+            - generic [ref=e149]: NextJS
+            - generic [ref=e150]: ShadCN
+            - generic [ref=e151]: PostgresSQL
+          - link "View Project" [ref=e152]:
+            - /url: https://zen-palette.vercel.app
+        - generic [ref=e157]:
+          - generic [ref=e158]:
+            - heading "Zenpalette" [level=3] [ref=e159]
+            - generic [ref=e160]: "2025"
+          - paragraph [ref=e161]: A randomized Colour palette generator for day to day designing uses.
+          - generic [ref=e162]:
+            - generic [ref=e163]: React
+            - generic [ref=e164]: TailwindCSS
+            - generic [ref=e165]: Vite
+          - link "View Project" [ref=e166]:
+            - /url: https://zen-palette.vercel.app
+        - generic [ref=e171]:
+          - generic [ref=e172]:
+            - heading "Password Manager" [level=3] [ref=e173]
+            - generic [ref=e174]: "2025"
+          - paragraph [ref=e175]: A demo password manager to store passwords or generate secure passwords
+          - generic [ref=e176]:
+            - generic [ref=e177]: Next.js
+            - generic [ref=e178]: MongoDB
+            - generic [ref=e179]: Tailwind
+          - link "View Project" [ref=e180]:
+            - /url: https://password-manager-next-kappa.vercel.app/
+        - generic [ref=e185]:
+          - generic [ref=e186]:
+            - heading "QuickLinky" [level=3] [ref=e187]
+            - generic [ref=e188]: "2025"
+          - paragraph [ref=e189]: A simple, free and quick URL shortener with custom slugs that lets you shorten any URL with ease
+          - generic [ref=e190]:
+            - generic [ref=e191]: Next.js
+            - generic [ref=e192]: React
+            - generic [ref=e193]: Tailwind
+            - generic [ref=e194]: Dynamic Routing
+          - link "View Project" [ref=e195]:
+            - /url: https://quicklinky.vercel.app/
+        - generic [ref=e200]:
+          - generic [ref=e201]:
+            - heading "QuickPasty" [level=3] [ref=e202]
+            - generic [ref=e203]: "2025"
+          - paragraph [ref=e204]: Just paste it and share it with the internet with this simple and free pastebin.
+          - generic [ref=e205]:
+            - generic [ref=e206]: Next.js
+            - generic [ref=e207]: Dynamic Routing
+            - generic [ref=e208]: Tailwind
+            - generic [ref=e209]: JWT Auth
+          - link "View Project" [ref=e210]:
+            - /url: https://quickpasty.vercel.app/
+        - generic [ref=e215]:
+          - generic [ref=e216]:
+            - heading "Lumio" [level=3] [ref=e217]
+            - generic [ref=e218]: "2025"
+          - paragraph [ref=e219]: A simple, free and chat application for light conversations with your friends.
+          - generic [ref=e220]:
+            - generic [ref=e221]: Next.js
+            - generic [ref=e222]: WebSocket
+            - generic [ref=e223]: Tailwind
+          - link "View Project" [ref=e224]:
+            - /url: https://lumiochat.vercel.app/
+    - generic [ref=e229]:
+      - generic [ref=e230]:
+        - heading "Let's Connect" [level=2] [ref=e231]
+        - paragraph [ref=e232]: Want to get in touch? I'd love to hear from you— whether projects, gigs, collaborations, or just a friendly hello.
+        - generic [ref=e233]:
+          - link "prasonkc7@gmail.com" [ref=e234]:
+            - /url: mailto:prasonkc7@gmail.com
+          - link "+977 (947) 589 3885" [ref=e239]:
+            - /url: tel:+1234567890
+        - generic [ref=e244]:
+          - link [ref=e245]:
+            - /url: https://x.com/KcPrason
+          - link [ref=e248]:
+            - /url: https://www.linkedin.com/in/prason-kc-6782061b6/
+          - link [ref=e251]:
+            - /url: https://github.com/prasonkc
+          - link [ref=e254]:
+            - /url: https://instagram.com/prasonkc
+      - generic [ref=e259]:
+        - generic [ref=e260]:
+          - generic [ref=e261]: Name
+          - textbox "Your name" [ref=e262]
+        - generic [ref=e263]:
+          - generic [ref=e264]: Email
+          - textbox "your.email@example.com" [ref=e265]
+        - generic [ref=e266]:
+          - generic [ref=e267]: Message
+          - textbox "Tell me about it..." [ref=e268]
+        - button "Send" [ref=e269]
+  - alert [ref=e274]
