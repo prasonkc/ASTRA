@@ -4,8 +4,11 @@ class OllamaModel:
     def __init__(self, model_name):
         self.model_name = model_name
         # Temporary cached chat history 
-        self.history = []
-
+        with open("./config/identity.txt") as f:
+            system_prompt = f.read().strip()
+        
+        self.history = [{"role": "system", "content": system_prompt}]
+            
     def generate(self, prompt):
         self.history.append({
             "role": "user",
