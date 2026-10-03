@@ -19,7 +19,10 @@ class Chat:
 
             if user_input.lower() == "exit":
                 break
-
+            
+            if user_input.strip() == "":
+                continue
+            
             response_stream = self.model.generate(user_input)
             print("ASTRA: ", end="", flush=True)
             
