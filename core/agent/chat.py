@@ -5,7 +5,7 @@ from ai.ollama import OllamaModel
 
 class Chat:
     def __init__(self):
-        self.model = OllamaModel("qwen3:8b")
+        self.model = OllamaModel("qwen3:14b")
 
     def start(self):
         print("Welcome to ASTRA. Type 'exit' to quit.")
@@ -46,4 +46,6 @@ class Chat:
                     content += chunk.message.content
                     print(chunk.message.content, end="", flush=True)
             print()
-            self.model.add_response(content)
+            print(thoughts)
+
+            self.model.add_response(content)            
