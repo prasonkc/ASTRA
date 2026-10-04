@@ -1,1 +1,0 @@
-Astra can store and forget memory, but it can't retreive contents from memory. No, agent can access the memory if i explicitly provide the category or content. Maybe it has something to do with the way database is structured. Speculation: Memory discrepancy when switching between different models for ASTRA.
