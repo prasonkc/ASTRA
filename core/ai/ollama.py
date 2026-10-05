@@ -1,6 +1,7 @@
 import ollama
 
 from tools.memory_tool import MemoryTool
+from tools.shell_tool import ShellTool
 from memory.chat_history import ChatHistory
 from utils.colors import (
     Colors, error, success, warning, info, title, dim, user_msg, important, secondary, bold
@@ -10,8 +11,16 @@ from utils.colors import (
 class OllamaModel:
     def __init__(self, model_name: str, session_id: str = None):
         self.model_name = model_name
-        self.memory_tool = MemoryTool()
         self.chat_history = ChatHistory()
+        
+        # Initialize tools
+        self.tools = {
+            "memory": MemoryTool(),
+            "shell": ShellTool()  # Allow all commands by default
+        }
+        
+        # Build combined function registry
+        self._build_function_registry()
         
         try:
             self.session_id = session_id or self.chat_history.create_session()
@@ -36,6 +45,15 @@ class OllamaModel:
                 self.chat_history.add_message(self.session_id, "system", system_prompt)
             except Exception:
                 pass
+
+    def _build_function_registry(self):
+        """Build combined tool schemas and function registry from all tools."""
+        self.all_tool_schemas = []
+        self.all_functions = {}
+        
+        for tool_name, tool in self.tools.items():
+            self.all_tool_schemas.extend(tool.get_tools())
+            self.all_functions.update(tool.functions)
 
     def _load_system_prompt(self) -> str:
         """Load system prompt from config file with fallback."""
@@ -64,7 +82,7 @@ class OllamaModel:
                 response = ollama.chat(
                     model=self.model_name,
                     messages=self.history,
-                    tools=self.memory_tool.get_tools(),
+                    tools=self.all_tool_schemas,
                     think=True,
                     stream=True
                 )
@@ -99,14 +117,26 @@ class OllamaModel:
                 yield from chunks
                 return
 
+            # Convert tool_calls to serializable dicts
+            serializable_tool_calls = []
+            for tc in tool_calls:
+                serializable_tool_calls.append({
+                    "id": tc.id if hasattr(tc, 'id') else None,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments
+                    }
+                })
+
             # Store the assistant's tool call in conversation history
             try:
                 self.history.append({
                     "role": "assistant",
                     "content": content,
-                    "tool_calls": tool_calls
+                    "tool_calls": serializable_tool_calls
                 })
-                self.chat_history.add_message(self.session_id, "assistant", content, tool_calls)
+                self.chat_history.add_message(self.session_id, "assistant", content, serializable_tool_calls)
             except Exception as e:
                 print(warning(f"Warning: Failed to save assistant tool call: {e}"))
 
@@ -116,7 +146,7 @@ class OllamaModel:
                     tool_name = tool_call.function.name
                     arguments = tool_call.function.arguments
 
-                    function = self.memory_tool.functions.get(tool_name)
+                    function = self.all_functions.get(tool_name)
 
                     if function is None:
                         result = f"Unknown tool: {tool_name}"
