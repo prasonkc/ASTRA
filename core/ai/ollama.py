@@ -1,7 +1,7 @@
 import ollama
+from typing import List
 
-from tools.memory_tool import MemoryTool
-from tools.shell_tool import ShellTool
+from tools.tool_registry import get_tool_registry
 from memory.chat_history import ChatHistory
 from utils.colors import (
     Colors, error, success, warning, info, title, dim, user_msg, important, secondary, bold
@@ -13,14 +13,11 @@ class OllamaModel:
         self.model_name = model_name
         self.chat_history = ChatHistory()
         
-        # Initialize tools
-        self.tools = {
-            "memory": MemoryTool(),
-            "shell": ShellTool()  # Allow all commands by default
-        }
+        # Initialize tool registry (manages all tools and filtering)
+        self.tool_registry = get_tool_registry()
         
-        # Build combined function registry
-        self._build_function_registry()
+        # Keep reference to all functions for execution
+        self.all_functions = self.tool_registry.get_all_functions()
         
         try:
             self.session_id = session_id or self.chat_history.create_session()
@@ -46,15 +43,6 @@ class OllamaModel:
             except Exception:
                 pass
 
-    def _build_function_registry(self):
-        """Build combined tool schemas and function registry from all tools."""
-        self.all_tool_schemas = []
-        self.all_functions = {}
-        
-        for tool_name, tool in self.tools.items():
-            self.all_tool_schemas.extend(tool.get_tools())
-            self.all_functions.update(tool.functions)
-
     def _load_system_prompt(self) -> str:
         """Load system prompt from config file with fallback."""
         try:
@@ -65,6 +53,10 @@ class OllamaModel:
         except Exception as e:
             print(warning(f"Warning: Could not load identity.txt: {e}"))
             return "You are ASTRA, an AI academic assistant."
+
+    def _get_tools_for_query(self, prompt: str) -> List[Dict[str, Any]]:
+        """Get filtered tool schemas relevant to the user's query."""
+        return self.tool_registry.get_filtered_schemas(prompt)
 
     def generate(self, prompt: str):
         """Generate a response from the model with tool calling support."""
@@ -77,12 +69,15 @@ class OllamaModel:
         except Exception as e:
             print(warning(f"Warning: Failed to save user message: {e}"))
 
+        # Get relevant tools for this query
+        relevant_tools = self._get_tools_for_query(prompt)
+
         while True:
             try:
                 response = ollama.chat(
                     model=self.model_name,
                     messages=self.history,
-                    tools=self.all_tool_schemas,
+                    tools=relevant_tools,
                     think=True,
                     stream=True
                 )
