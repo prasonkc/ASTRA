@@ -10,6 +10,7 @@ import re
 from tools.memory_tool import MemoryTool
 from tools.shell_tool import ShellTool
 from tools.web_tool import WebTool
+from tools.browser_tool import BrowserTool
 
 
 @dataclass
@@ -47,6 +48,7 @@ class ToolRegistry:
             "memory": MemoryTool(),
             "shell": ShellTool(),
             "web": WebTool(),
+            "browser": BrowserTool(),
         }
         
         # Define categories
@@ -69,6 +71,16 @@ class ToolRegistry:
                 description="Web search and content fetching",
                 keywords=["search", "web", "internet", "google", "duckduckgo", "fetch", "download", "crawl", "find files"],
                 tools=["web_search", "web_fetch", "web_download", "web_crawl", "web_find_files"]
+            ),
+            "browser": ToolCategory(
+                name="browser",
+                description="Interactive web browsing (navigation, forms, extraction)",
+                keywords=["browser", "browse", "navigate", "click", "form", "fill", "submit", "extract", "links", "back", "open", "visit"],
+                tools=[
+                    "browser_open", "browser_back", "browser_status", "browser_text",
+                    "browser_links", "browser_click", "browser_extract", "browser_forms",
+                    "browser_fill", "browser_submit", "browser_search"
+                ]
             ),
         }
         
@@ -188,7 +200,7 @@ class ToolRegistry:
         if remaining_slots > 0:
             used_names = {s["function"]["name"] for s in selected}
             # Priority order for fallback tools (most generally useful first)
-            fallback_priority = ["shell", "web_search"]
+            fallback_priority = ["shell", "web_search", "browser"]
             
             for fallback_cat in fallback_priority:
                 if remaining_slots <= 0:
