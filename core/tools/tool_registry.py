@@ -11,6 +11,8 @@ from tools.memory_tool import MemoryTool
 from tools.shell_tool import ShellTool
 from tools.web_tool import WebTool
 from tools.browser_tool import BrowserTool
+from tools.playwright_tool import PlaywrightBrowserTool
+from tools.file_reader_tool import FileReaderTool
 
 
 @dataclass
@@ -48,7 +50,9 @@ class ToolRegistry:
             "memory": MemoryTool(),
             "shell": ShellTool(),
             "web": WebTool(),
-            "browser": BrowserTool(),
+            "browser": BrowserTool(),      # HTTP-based headless browser
+            "playwright": PlaywrightBrowserTool(headless=False),  # Visible Playwright browser
+            "file_reader": FileReaderTool(),  # File reading (PDF, DOCX, PPTX, XLSX, CSV, JSON, etc.)
         }
         
         # Define categories
@@ -68,18 +72,40 @@ class ToolRegistry:
             ),
             "web_search": ToolCategory(
                 name="web_search",
-                description="Web search and content fetching",
+                description="Web search and content fetching (HTTP-based)",
                 keywords=["search", "web", "internet", "google", "duckduckgo", "fetch", "download", "crawl", "find files"],
                 tools=["web_search", "web_fetch", "web_download", "web_crawl", "web_find_files"]
             ),
             "browser": ToolCategory(
                 name="browser",
-                description="Interactive web browsing (navigation, forms, extraction)",
+                description="Interactive web browsing (HTTP-based headless)",
                 keywords=["browser", "browse", "navigate", "click", "form", "fill", "submit", "extract", "links", "back", "open", "visit"],
                 tools=[
                     "browser_open", "browser_back", "browser_status", "browser_text",
                     "browser_links", "browser_click", "browser_extract", "browser_forms",
                     "browser_fill", "browser_submit", "browser_search"
+                ]
+            ),
+            "playwright": ToolCategory(
+                name="playwright",
+                description="Visible browser automation with full JavaScript support (Playwright)",
+                keywords=["playwright", "visible", "chrome", "chromium", "javascript", "js", "screenshot", "pdf", "automation", "visible browser", "real browser"],
+                tools=[
+                    "playwright_open", "playwright_close", "playwright_navigate", "playwright_click", "playwright_type", "playwright_fill",
+                    "playwright_select", "playwright_wait", "playwright_extract", "playwright_screenshot", "playwright_pdf",
+                    "playwright_eval", "playwright_scroll", "playwright_hover", "playwright_press", "playwright_get_text",
+                    "playwright_get_html", "playwright_get_url", "playwright_get_title", "playwright_go_back",
+                    "playwright_go_forward", "playwright_reload", "playwright_new_tab", "playwright_switch_tab",
+                    "playwright_close_tab"
+                ]
+            ),
+            "file_reader": ToolCategory(
+                name="file_reader",
+                description="Read and extract content from various file formats (PDF, DOCX, PPTX, XLSX, CSV, JSON, TXT, MD, etc.)",
+                keywords=["file", "read", "pdf", "docx", "pptx", "xlsx", "csv", "json", "txt", "document", "spreadsheet", "presentation", "spreadsheet", "excel", "powerpoint", "word", "text", "markdown"],
+                tools=[
+                    "file_read", "file_read_pdf", "file_read_docx", "file_read_pptx", "file_read_xlsx",
+                    "file_read_csv", "file_read_json", "file_read_text", "file_list", "file_info"
                 ]
             ),
         }
@@ -200,7 +226,7 @@ class ToolRegistry:
         if remaining_slots > 0:
             used_names = {s["function"]["name"] for s in selected}
             # Priority order for fallback tools (most generally useful first)
-            fallback_priority = ["shell", "web_search", "browser"]
+            fallback_priority = ["shell", "web_search", "browser", "playwright"]
             
             for fallback_cat in fallback_priority:
                 if remaining_slots <= 0:

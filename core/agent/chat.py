@@ -11,7 +11,7 @@ from utils.colors import (
 class Chat:
     def __init__(self):
         try:
-            self.model = OllamaModel("qwen3:8b")
+            self.model = OllamaModel("qwen3:14b")
             self.session_controller = SessionController(self.model)
         except Exception as e:
             print(error(f"Failed to initialize chat: {e}"))
