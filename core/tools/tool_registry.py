@@ -13,6 +13,7 @@ from tools.web_tool import WebTool
 from tools.browser_tool import BrowserTool
 from tools.playwright_tool import PlaywrightBrowserTool
 from tools.file_reader_tool import FileReaderTool
+from tools.word_tool import WordTool
 
 
 @dataclass
@@ -53,6 +54,7 @@ class ToolRegistry:
             "browser": BrowserTool(),      # HTTP-based headless browser
             "playwright": PlaywrightBrowserTool(headless=False),  # Visible Playwright browser
             "file_reader": FileReaderTool(),  # File reading (PDF, DOCX, PPTX, XLSX, CSV, JSON, etc.)
+            "word": WordTool(),  # Create, edit and format Word (.docx) documents
         }
         
         # Define categories
@@ -106,6 +108,23 @@ class ToolRegistry:
                 tools=[
                     "file_read", "file_read_pdf", "file_read_docx", "file_read_pptx", "file_read_xlsx",
                     "file_read_csv", "file_read_json", "file_read_text", "file_list", "file_info"
+                ]
+            ),
+            "word": ToolCategory(
+                name="word",
+                description="Create, edit and format Microsoft Word (.docx) documents",
+                keywords=[
+                    "word", "docx", "doc", "document", "report", "essay", "letter",
+                    "resume", "cv", "thesis", "paper", "write a", "write me", "draft",
+                    "format a document", "heading", "paragraph", "table of contents",
+                    "memo", "article", "assignment", "title page", "word document",
+                    "word doc", "manuscript", "cover letter", "contract"
+                ],
+                tools=[
+                    "word_create", "word_read", "word_info",
+                    "word_add_heading", "word_add_paragraph", "word_add_bullet",
+                    "word_add_table", "word_format", "word_replace",
+                    "word_delete_paragraph"
                 ]
             ),
         }
