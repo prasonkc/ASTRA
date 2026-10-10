@@ -1,1 +1,0 @@
-# Python\n__pycache__/\n*.pyc\n*.pyo\n*.pyd\n*.egg-info/\ndist/\nbuild/\n.venv/\nenv/\n\n# macOS\n.DS_Store\n\n# VSCode\n.vscode/\n\n# Other\n*.log\n*.tmp
