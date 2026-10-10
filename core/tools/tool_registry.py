@@ -14,6 +14,8 @@ from tools.browser_tool import BrowserTool
 from tools.playwright_tool import PlaywrightBrowserTool
 from tools.file_reader_tool import FileReaderTool
 from tools.word_tool import WordTool
+from tools.powerpoint_tool import PowerPointTool
+from tools.excel_tool import ExcelTool
 
 
 @dataclass
@@ -55,6 +57,8 @@ class ToolRegistry:
             "playwright": PlaywrightBrowserTool(headless=False),  # Visible Playwright browser
             "file_reader": FileReaderTool(),  # File reading (PDF, DOCX, PPTX, XLSX, CSV, JSON, etc.)
             "word": WordTool(),  # Create, edit and format Word (.docx) documents
+            "powerpoint": PowerPointTool(),  # Create, edit and format PowerPoint (.pptx) presentations
+            "excel": ExcelTool(),  # Create, edit and format Excel (.xlsx) spreadsheets
         }
         
         # Define categories
@@ -125,6 +129,36 @@ class ToolRegistry:
                     "word_add_heading", "word_add_paragraph", "word_add_bullet",
                     "word_add_table", "word_format", "word_replace",
                     "word_delete_paragraph"
+                ]
+            ),
+            "powerpoint": ToolCategory(
+                name="powerpoint",
+                description="Create, edit and format PowerPoint (.pptx) presentations",
+                keywords=[
+                    "powerpoint", "power point", "pptx", "ppt", "presentation",
+                    "slide", "slides", "deck", "slideshow", "slide deck",
+                    "pitch deck", "keynote", "title slide", "bullet points"
+                ],
+                tools=[
+                    "ppt_create", "ppt_read", "ppt_info", "ppt_add_slide",
+                    "ppt_add_text", "ppt_add_bullets", "ppt_add_table",
+                    "ppt_add_image", "ppt_format", "ppt_delete_slide"
+                ]
+            ),
+            "excel": ToolCategory(
+                name="excel",
+                description="Create, edit and format Excel (.xlsx) spreadsheets",
+                keywords=[
+                    "excel", "xlsx", "xls", "spreadsheet", "workbook", "worksheet",
+                    "sheet", "cell", "cells", "formula", "formulas", "csv",
+                    "columns", "rows", "tabular", "budget", "finance sheet",
+                    "data table", "pivot", "chart data"
+                ],
+                tools=[
+                    "excel_create", "excel_read", "excel_info", "excel_write",
+                    "excel_write_rows", "excel_format", "excel_formula",
+                    "excel_find", "excel_stats", "excel_add_sheet",
+                    "excel_delete_sheet", "excel_to_csv", "csv_to_excel"
                 ]
             ),
         }
