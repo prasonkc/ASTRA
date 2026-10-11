@@ -85,12 +85,8 @@ class Chat:
                 if thoughts:
                     print(dim(thoughts))
 
-                # Add response to history
-                if content:
-                    try:
-                        self.model.add_response(content)
-                    except Exception as e:
-                        print(warning(f"Warning: Failed to save response to history: {e}"))
+                # Assistant responses are persisted by the core (OllamaModel.generate)
+                # so the terminal and web wrapper share a single source of truth.
 
             except EOFError:
                 print("\nGoodbye!")

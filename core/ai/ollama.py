@@ -58,10 +58,30 @@ class OllamaModel:
         """Get filtered tool schemas relevant to the user's query."""
         return self.tool_registry.get_filtered_schemas(prompt)
 
-    def generate(self, prompt: str):
-        """Generate a response from the model with tool calling support."""
+    def generate(self, prompt: str, on_event=None):
+        """Generate a response from the model with tool calling support.
+
+        ``on_event`` is an optional callback used by embedders (such as the
+        astra-web wrapper) to observe what the agent is doing while it works.
+        It receives plain, JSON-serializable dicts, for example::
+
+            {"type": "tool_call",   "name": "web_search", "arguments": {...}}
+            {"type": "tool_result", "name": "web_search", "success": True,
+             "result": "..."}
+
+        The terminal application does not pass it, so its behaviour is
+        completely unchanged.
+        """
         if not prompt or not prompt.strip():
             return iter([])
+
+        def emit(event: dict):
+            if on_event is None:
+                return
+            try:
+                on_event(event)
+            except Exception as e:
+                print(warning(f"Warning: event callback failed: {e}"))
 
         try:
             self.history.append({"role": "user", "content": prompt})
@@ -91,25 +111,34 @@ class OllamaModel:
                 yield self._error_chunk(f"Unexpected error calling model: {e}")
                 return
 
-            chunks = []
             tool_calls = []
             content = ""
 
             try:
                 for chunk in response:
-                    chunks.append(chunk)
-
                     if chunk.message.content:
                         content += chunk.message.content
 
                     if chunk.message.tool_calls:
                         tool_calls.extend(chunk.message.tool_calls)
+
+                    # Stream every chunk straight through so the terminal app and
+                    # embedders see tokens as they are produced, not only once the
+                    # whole response is finished.
+                    yield chunk
             except Exception as e:
                 yield self._error_chunk(f"Error reading response stream: {e}")
                 return
 
             if not tool_calls:
-                yield from chunks
+                # Persist the assistant's final answer. The core owns
+                # conversation persistence, so the terminal app and the web
+                # wrapper stay consistent.
+                try:
+                    self.history.append({"role": "assistant", "content": content})
+                    self.chat_history.add_message(self.session_id, "assistant", content)
+                except Exception as e:
+                    print(warning(f"Warning: Failed to save assistant response: {e}"))
                 return
 
             # Convert tool_calls to serializable dicts
@@ -137,16 +166,28 @@ class OllamaModel:
 
             # Execute requested tools
             for tool_call in tool_calls:
+                tool_name = getattr(tool_call.function, "name", "unknown")
+                arguments = getattr(tool_call.function, "arguments", {}) or {}
+                emit({"type": "tool_call", "name": tool_name, "arguments": arguments})
                 try:
-                    tool_name = tool_call.function.name
-                    arguments = tool_call.function.arguments
-
                     function = self.all_functions.get(tool_name)
 
                     if function is None:
                         result = f"Unknown tool: {tool_name}"
+                        emit({
+                            "type": "tool_result",
+                            "name": tool_name,
+                            "success": False,
+                            "result": result,
+                        })
                     else:
                         result = function(**arguments)
+                        emit({
+                            "type": "tool_result",
+                            "name": tool_name,
+                            "success": True,
+                            "result": str(result),
+                        })
 
                     self.history.append({
                         "role": "tool",
@@ -156,6 +197,12 @@ class OllamaModel:
                 except Exception as e:
                     error_msg = f"Tool execution failed: {e}"
                     print(warning(f"  {error_msg}"))
+                    emit({
+                        "type": "tool_result",
+                        "name": tool_name,
+                        "success": False,
+                        "result": error_msg,
+                    })
                     self.history.append({
                         "role": "tool",
                         "content": error_msg

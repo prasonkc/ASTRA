@@ -123,7 +123,7 @@ class ChatHistory:
             cursor = self.conn.execute("""
                 SELECT role, content, tool_calls FROM messages
                 WHERE conversation_id = (SELECT id FROM conversations WHERE session_id = ?)
-                ORDER BY created_at ASC
+                ORDER BY created_at ASC, id ASC
             """, (session_id,))
             
             messages = []
