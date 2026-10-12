@@ -177,6 +177,8 @@ ASTRA/
 ├── core/                      # standalone terminal app — the source of truth
 │   ├── main.py                # terminal entry point
 │   ├── architecture.md        # sessions/history deep dive
+│   ├── browser_bridge.py      # shared in-memory page snapshot store
+│   ├── browser_server.py      # localhost HTTP receiver for the extension
 │   ├── config/
 │   │   ├── identity.txt       # system prompt
 │   │   └── settings.json      # provider config (git-ignored, created on save)
@@ -206,6 +208,8 @@ ASTRA/
 │   │   ├── shell_tool.py      # shell_exec + file ops
 │   │   ├── web_tool.py        # web_search / fetch / download / crawl / find_files
 │   │   ├── browser_tool.py    # HTTP+BeautifulSoup "browser"
+│   │   ├── browser_context_tool.py  # page the user is viewing (extension)
+│   │   ├── browser_control_tool.py  # automate the user's browser (extension)
 │   │   ├── playwright_tool.py # real Chromium automation (async Playwright)
 │   │   ├── file_reader_tool.py# read PDF/DOCX/PPTX/XLSX/CSV/JSON/text
 │   │   ├── word_tool.py       # create/edit .docx
@@ -215,7 +219,7 @@ ASTRA/
 │   │   └── colors.py          # ANSI color helpers
 │   ├── downloads/             # generated files (git-ignored)
 │   └── .venv/                 # virtualenv (git-ignored)
-└── web/
+├── web/
     ├── astra-web              # single launcher (bash)
     ├── requirements.txt       # fastapi, uvicorn
     ├── README.md
@@ -229,6 +233,15 @@ ASTRA/
         ├── styles.css
         ├── app.js
         └── favicon.svg
+└── extension/                 # ASTRA Firefox extension (observe + automate)
+    └── firefox/
+        ├── manifest.json      # MV3 manifest
+        ├── background.js      # toggle, per-tab context, command poller
+        ├── content.js         # page snapshot + mouse/selection + DOM executor
+        ├── popup.html         # one-button integrate UI
+        ├── popup.js           # toggle + status
+        ├── README.md
+        └── ARCHITECTURE.md    # protocol, lifecycle, security, roadmap
 ```
 
 ---
@@ -279,6 +292,15 @@ The terminal app is the source of truth and needs no web server:
 cd core
 ./.venv/bin/python main.py
 ```
+
+The terminal starts a tiny localhost HTTP listener (`core/browser_server.py`) on
+`127.0.0.1:8765` so the ASTRA Firefox extension can push the page the user is
+viewing straight into the core — no web app involved. Same routes as the web
+app (`POST|GET|DELETE /api/browser/context`, plus `GET /api/browser/commands` and
+`POST /api/browser/commands/<id>/result` for automation). Control it with
+`ASTRA_BROWSER_BRIDGE=0` (off), `ASTRA_BROWSER_HOST`, `ASTRA_BROWSER_PORT`. If
+the port is already taken (astra-web is running), the bridge stays off and the
+web server handles the requests instead.
 
 ### Verify a fresh checkout
 
@@ -822,10 +844,10 @@ returns a bounded, relevance-filtered subset per query.
 - `ToolCategory` (dataclass): `name`, `description`, `keywords`, `tools`,
   `always_include`.
 - `__init__()` — build `tools`, `categories`, `tool_to_category`.
-- `_register_all_tools()` — instantiate the nine tool objects
-  (`PlaywrightBrowserTool(headless=False)`) and define categories. **All tools
-  are constructed with no arguments**, so `working_dir` defaults to the CWD
-  (`core/`).
+- `_register_all_tools()` — instantiate the eleven tool objects
+  (`PlaywrightBrowserTool(headless=False)`, `BrowserContextTool()`,
+  `BrowserControlTool()`) and define categories. **All tools are constructed with
+  no arguments**, so `working_dir` defaults to the CWD (`core/`).
 - `get_all_tool_schemas() -> list` — concatenate every tool's `get_tools()`.
 - `get_all_functions() -> dict` — merge every tool's `.functions` map
   (tool-name → bound method). Later duplicates overwrite earlier ones.
@@ -844,6 +866,8 @@ returns a bounded, relevance-filtered subset per query.
 | Category | Tools |
 |----------|-------|
 | `core` (always) | `memory_remember`, `memory_search`, `memory_forget` |
+| `browser_context` (always) | `browser_context` |
+| `browser_control` (always) | 12 `ext_*` tools (see below) |
 | `shell` | `shell_exec`, `shell_read`, `shell_write`, `shell_list`, `shell_glob`, `shell_exists` |
 | `web_search` | `web_search`, `web_fetch`, `web_download`, `web_crawl`, `web_find_files` |
 | `browser` | `browser_open`, `browser_back`, `browser_status`, `browser_text`, `browser_links`, `browser_click`, `browser_extract`, `browser_forms`, `browser_fill`, `browser_submit`, `browser_search` |
@@ -865,7 +889,9 @@ parameters as keyword arguments.
 **Maintainer notes.** The `playwright` category alone defines 25 tools, more than
 `MAX_TOOLS`, so it can never be fully selected in one query. Keyword scoring is
 naive substring matching. `playwright` is imported at module import time with no
-fallback (see §18).
+fallback (see §18). The always-included categories (`core`, `browser_context`,
+`browser_control`) already occupy 16 of the 20 slots, so keep new always-on tools
+rare.
 
 ### 10.2 Tool reference
 
@@ -939,6 +965,65 @@ A **stateful HTTP + BeautifulSoup** "browser" with **no JavaScript**.
 - Tools: the 11 `browser_*` schemas.
 
 Use `playwright_tool` when a page needs JavaScript.
+
+#### `browser_context_tool.py` — `BrowserContextTool`
+
+Exposes the page the **user is currently viewing in their own Firefox browser**
+to the agent, via the ASTRA browser extension (`extension/firefox/`). The
+extension POSTs a snapshot (URL, title, HTML, visible text, selected text, mouse
+position) to `POST /api/browser/context`; `web/backend` merges it into
+:mod:`browser_bridge` and this always-included tool reads the latest snapshot.
+
+- `context(field="all") -> dict` — `field` is `text`, `html`, `selection`, `url`,
+  `title`, `mouse` or `all`. Returns `{"available": False, …}` when nothing has
+  been shared yet. HTML/text are clipped (`MAX_HTML_CHARS` 50 000,
+  `MAX_TEXT_CHARS` 20 000) because the result is written into conversation
+  history.
+- Tools: the single `browser_context` schema (category `browser_context`,
+  `always_include=True`).
+
+> **Maintainer notes.** The store is in-memory only and cleared with the process
+> (or `DELETE /api/browser/context`). The tool is always offered so ASTRA can
+> answer "explain this page" without the user naming it, but it returns
+> `available: False` until the extension is switched on.
+
+#### `browser_control_tool.py` — `BrowserControlTool`
+
+Automates the **user's own Firefox browser** through the ASTRA extension
+(`extension/firefox/`), so actions happen visibly in the tab the user has open.
+This is the counterpart to `browser_context_tool`: `browser_context` *reads* what
+the user sees, `browser_control` *acts* on it.
+
+Every call is a round-trip through :mod:`browser_bridge`:
+
+```
+tool ─enqueue_command─▶ queue ──GET /api/browser/commands──▶ extension (Firefox)
+  ▲                                                            │ execute
+  └──────────── tool returns ──POST /api/browser/commands/{id}/result◀────────┘
+```
+
+The tool blocks on a `threading.Condition` until the extension posts a result or
+`COMMAND_TIMEOUT` (60 s) elapses, then returns
+`{"id", "name", "success", "result", "error"}`. See
+`extension/firefox/ARCHITECTURE.md` for the full protocol.
+
+- Tab management: `open_tab(url="")`, `list_tabs()`, `switch_tab(target)`,
+  `close_tab()`.
+- Navigation: `navigate(url)`, `search(query, engine="google")` (also
+  duckduckgo/bing; returns the results page's visible text).
+- Page interaction: `click(selector, text)`, `type_text(text, selector)`,
+  `press_key(key)`, `scroll(direction, amount)`.
+- Scripting / reading: `eval_js(expression)` (content-script world),
+  `read_page(part="text")` (text/html/url/title/selection/all).
+- Tools: the 12 `ext_*` schemas (category `browser_control`,
+  `always_include=True`) — names in the registry table above.
+
+> **Maintainer notes.** Requires the extension to be on **and** a normal page in
+> the active tab; otherwise calls time out with an explanatory message. Tab and
+> navigation commands run in `background.js` via the `tabs` API; DOM commands are
+> delegated to `content.js`. `ext_eval_js` runs in the content-script world, not
+> the page's JS world. The command channel is unauthenticated and localhost-only —
+> see the security section in `extension/firefox/ARCHITECTURE.md`.
 
 #### `playwright_tool.py` — `PlaywrightBrowserTool`
 
@@ -1175,6 +1260,11 @@ All endpoints are on the FastAPI app. JSON bodies unless noted.
 | `DELETE` | `/api/sessions/{id}` | — | `{ok, session_id}` (404 if absent) |
 | `GET` | `/api/sessions/{id}/messages` | — | `{session_id, messages}` |
 | `POST` | `/api/chat` | `ChatRequest` | NDJSON stream (400 if empty) |
+| `POST` | `/api/browser/context` | `BrowserContextPayload` | `{ok, received_at}` |
+| `GET` | `/api/browser/context` | — | `{context}` (latest page snapshot or `null`) |
+| `DELETE` | `/api/browser/context` | — | `{ok}` |
+| `GET` | `/api/browser/commands` | — | `{command}` (`{id, name, arguments}` or `null`) |
+| `POST` | `/api/browser/commands/{id}/result` | `CommandResultPayload` | `{accepted}` (404 if unknown/finished) |
 | `GET` | `/api/files?path=…` | — | file (inline) or 404 |
 | `GET` | `/` | — | `index.html` |
 | `GET` | `/favicon.ico` | — | `favicon.svg` or 404 |
@@ -1600,6 +1690,9 @@ Provider/model aliases: `local`→`ollama`, `gpt`→`openai`, `claude`→`anthro
 | `DELETE` | `/api/sessions/{id}` | no | Delete conversation |
 | `GET` | `/api/sessions/{id}/messages` | no | Message history |
 | `POST` | `/api/chat` | NDJSON | Stream a chat turn |
+| `POST` | `/api/browser/context` | no | Receive a page snapshot from the ASTRA Firefox extension |
+| `GET` | `/api/browser/context` | no | Latest page snapshot |
+| `DELETE` | `/api/browser/context` | no | Forget the page snapshot |
 | `GET` | `/api/files` | no | Serve a generated file |
 
 ---
@@ -1630,6 +1723,11 @@ A quick map of the most important symbols to their files.
 | `ShellTool` | `core/tools/shell_tool.py` |
 | `WebTool` | `core/tools/web_tool.py` |
 | `BrowserTool` | `core/tools/browser_tool.py` |
+| `BrowserContextTool` | `core/tools/browser_context_tool.py` |
+| `BrowserControlTool` | `core/tools/browser_control_tool.py` |
+| `set_context`, `get_context`, `clear_context` | `core/browser_bridge.py` |
+| `enqueue_command`, `next_command`, `submit_command_result` | `core/browser_bridge.py` |
+| `start_browser_context_server`, `browser_bridge_endpoint` | `core/browser_server.py` |
 | `PlaywrightBrowserTool` | `core/tools/playwright_tool.py` |
 | `FileReaderTool` | `core/tools/file_reader_tool.py` |
 | `WordTool` | `core/tools/word_tool.py` |

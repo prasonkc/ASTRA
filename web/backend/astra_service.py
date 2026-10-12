@@ -48,9 +48,37 @@ from ai import local_setup  # noqa: E402
 from ai import settings as settings_module  # noqa: E402
 from ai.model import AgentModel  # noqa: E402
 from memory.chat_history import ChatHistory  # noqa: E402
+import browser_bridge  # noqa: E402  (core is on sys.path)
 
 
 MAX_RESULT_CHARS = 20_000
+
+
+def set_browser_context(data: dict) -> dict:
+    """Store the latest page snapshot sent by the ASTRA browser extension."""
+    return browser_bridge.set_context(data)
+
+
+def get_browser_context():
+    """Return the latest page snapshot, or ``None`` if none arrived yet."""
+    return browser_bridge.get_context()
+
+
+def clear_browser_context() -> None:
+    """Forget the stored page snapshot."""
+    browser_bridge.clear_context()
+
+
+def command_poll_payload() -> dict:
+    """Next queued browser command for the extension, or ``command: None``."""
+    return browser_bridge.command_poll_payload()
+
+
+def submit_command_result(command_id: int, ok: bool, result=None, error: str = None) -> bool:
+    """Record the extension's result and wake the waiting tool."""
+    return browser_bridge.submit_command_result(
+        command_id, ok=bool(ok), result=result, error=error
+    )
 
 
 def _build_model(model_name: Optional[str] = None, provider: Optional[str] = None) -> "AgentModel":

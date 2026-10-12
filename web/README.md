@@ -105,6 +105,39 @@ Supported API:
 | POST     | `/api/thinking`                    | Toggle reasoning for the active model |
 | GET      | `/api/providers/ollama/status`     | Ollama install/run + model list  |
 | POST     | `/api/providers/ollama/setup`      | Install Ollama + pull a model (NDJSON) |
+| POST     | `/api/browser/context`             | Receive a page snapshot from the ASTRA Firefox extension |
+| GET      | `/api/browser/context`             | Latest page snapshot (debug)     |
+| DELETE   | `/api/browser/context`             | Forget the page snapshot         |
+| GET      | `/api/browser/commands`            | Extension claims the next queued browser command |
+| POST     | `/api/browser/commands/{id}/result`| Extension reports a command's result |
+
+## Browser integration (Firefox extension)
+
+The `extension/firefox/` add-on has one button, **Integrate ASTRA with
+webpages**. When enabled on a page, it pushes a snapshot of what you are viewing
+(URL, title, HTML, visible text, selected text, mouse position) to
+`POST /api/browser/context`. The core parks the latest snapshot in memory
+(`browser_bridge`) and exposes it to the model through the always-available
+`browser_context` tool, so you can ask ASTRA to explain the page you are reading,
+summarise it, or answer questions about the highlighted text. Disabling the
+button calls `DELETE /api/browser/context` to forget it. See
+`extension/firefox/README.md` for setup.
+
+The same button also turns on **browser automation**. While integration is on,
+the extension polls `GET /api/browser/commands` for work and reports outcomes to
+`POST /api/browser/commands/{id}/result`. The core exposes `browser_control`
+tools (`ext_open_tab`, `ext_list_tabs`, `ext_switch_tab`, `ext_close_tab`,
+`ext_navigate`, `ext_search`, `ext_click`, `ext_type`, `ext_press_key`,
+`ext_scroll`, `ext_eval_js`, `ext_read_page`) that enqueue commands, so ASTRA can
+open tabs, search, click and type visibly in your own Firefox. The command
+channel and full design are documented in
+`extension/firefox/ARCHITECTURE.md`; the web app serves both channels through
+FastAPI.
+
+This works with **either** frontend: the web app serves the routes through
+FastAPI, while the terminal app starts the same routes itself in a tiny stdlib
+listener (`core/browser_server.py`, `127.0.0.1:8765`) — so `cd core && python
+main.py` needs no web server for the integration.
 
 ## Choosing a model / provider
 

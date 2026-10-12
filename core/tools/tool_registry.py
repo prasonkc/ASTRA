@@ -11,6 +11,8 @@ from tools.memory_tool import MemoryTool
 from tools.shell_tool import ShellTool
 from tools.web_tool import WebTool
 from tools.browser_tool import BrowserTool
+from tools.browser_context_tool import BrowserContextTool
+from tools.browser_control_tool import BrowserControlTool
 from tools.playwright_tool import PlaywrightBrowserTool
 from tools.file_reader_tool import FileReaderTool
 from tools.word_tool import WordTool
@@ -54,6 +56,8 @@ class ToolRegistry:
             "shell": ShellTool(),
             "web": WebTool(),
             "browser": BrowserTool(),      # HTTP-based headless browser
+            "browser_context": BrowserContextTool(),  # Page the user is viewing (browser extension)
+            "browser_control": BrowserControlTool(),  # Automate the user's Firefox via the extension
             "playwright": PlaywrightBrowserTool(headless=False),  # Visible Playwright browser
             "file_reader": FileReaderTool(),  # File reading (PDF, DOCX, PPTX, XLSX, CSV, JSON, etc.)
             "word": WordTool(),  # Create, edit and format Word (.docx) documents
@@ -68,6 +72,39 @@ class ToolRegistry:
                 description="Essential tools always available",
                 keywords=["remember", "search", "forget", "recall"],
                 tools=["memory_remember", "memory_search", "memory_forget"],
+                always_include=True
+            ),
+            "browser_context": ToolCategory(
+                name="browser_context",
+                description="The web page the user is currently viewing (via the ASTRA browser extension)",
+                keywords=[
+                    "page", "webpage", "website", "browser", "tab", "this page",
+                    "current page", "on screen", "open page", "selected text",
+                    "selection", "highlighted", "highlighted text", "mouse",
+                    "cursor", "explain this", "summarise this", "summarize this",
+                    "looking at", "reading"
+                ],
+                tools=["browser_context"],
+                always_include=True
+            ),
+            "browser_control": ToolCategory(
+                name="browser_control",
+                description="Automate the user's own Firefox browser through the ASTRA extension: tabs, navigation, clicking, typing, scrolling, JS",
+                keywords=[
+                    "open a tab", "new tab", "close tab", "switch tab", "my browser",
+                    "firefox", "user's browser", "your browser", "my tabs", "open tabs",
+                    "go to", "open url", "open the", "navigate to", "type",
+                    "type into", "fill in", "fill the", "click on", "click the",
+                    "search for", "google", "search in my browser", "browse the web",
+                    "press enter", "press key", "scroll down", "scroll up",
+                    "evaluate js", "run javascript", "automate", "current tab",
+                    "this tab", "active tab"
+                ],
+                tools=[
+                    "ext_open_tab", "ext_list_tabs", "ext_switch_tab", "ext_close_tab",
+                    "ext_navigate", "ext_search", "ext_click", "ext_type",
+                    "ext_press_key", "ext_scroll", "ext_eval_js", "ext_read_page",
+                ],
                 always_include=True
             ),
             "shell": ToolCategory(

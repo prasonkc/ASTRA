@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "ASTRA",
+  "version": "0.4.0",
+  "description": "Connect ASTRA to your browser: share the page you are viewing (URL, title, DOM, selection, mouse) and let ASTRA automate tabs, search, clicking and typing locally.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "astra@astra.local",
+      "strict_min_version": "115.0"
+    }
+  },
+  "permissions": ["storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_title": "ASTRA",
+    "default_popup": "popup.html"
+  }
+}

@@ -2,6 +2,7 @@ import sys
 import time
 import traceback
 from ai.model import AgentModel
+from browser_server import browser_bridge_endpoint, start_browser_context_server
 from controller.provider_controller import ProviderController
 from controller.session_controller import SessionController
 from utils.colors import (
@@ -31,6 +32,7 @@ class Chat:
             pass
         print(dim("Session commands: /s new | /s list | /s <num> | /s resume | /s del <num> | /s clear"))
         print(dim("Provider: /provider (local_setup · openai · anthropic · gemini) | /model <name> | /thinking on|off"))
+        self._start_browser_bridge()
         self._safe_show_current_session()
 
         while True:
@@ -116,6 +118,21 @@ class Chat:
 
         # Cleanup
         self._cleanup()
+
+    def _start_browser_bridge(self):
+        """Start the localhost listener for the ASTRA browser extension.
+
+        Idempotent; silently stays off when disabled via ASTRA_BROWSER_BRIDGE=0
+        or when the port is already taken (astra-web is running instead).
+        """
+        try:
+            server = start_browser_context_server()
+            if server is not None:
+                print(info(f"Browser integration: {browser_bridge_endpoint()}"))
+            else:
+                print(dim("Browser integration: off (disabled or port in use)"))
+        except Exception as e:
+            print(dim(f"Browser integration: not started ({e})"))
 
     def _safe_input(self, prompt: str) -> str | None:
         """Safely get user input, handling EOF and KeyboardInterrupt."""

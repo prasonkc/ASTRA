@@ -10,14 +10,24 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .astra_service import CORE_DIR, FRONTEND_DIR, get_service
+from .astra_service import (
+    CORE_DIR,
+    FRONTEND_DIR,
+    clear_browser_context,
+    command_poll_payload,
+    get_browser_context,
+    get_service,
+    set_browser_context,
+    submit_command_result,
+)
 
 
 @asynccontextmanager
@@ -29,6 +39,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ASTRA Web", version="1.0.0", lifespan=lifespan)
+
+# The ASTRA Firefox extension runs on its own origin and POSTs page context
+# here, so allow cross-origin requests. The server only ever binds to
+# 127.0.0.1, so this stays local.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class ChatRequest(BaseModel):
@@ -59,6 +79,33 @@ class ThinkingRequest(BaseModel):
 class LocalSetupRequest(BaseModel):
     model: str
     install: bool = True
+
+
+class MousePosition(BaseModel):
+    x: Optional[float] = None
+    y: Optional[float] = None
+    pageX: Optional[float] = None
+    pageY: Optional[float] = None
+
+
+class BrowserContextPayload(BaseModel):
+    """A page snapshot pushed by the ASTRA browser extension."""
+
+    url: Optional[str] = None
+    title: Optional[str] = None
+    html: Optional[str] = None
+    text: Optional[str] = None
+    selection: Optional[str] = None
+    mouse: Optional[MousePosition] = None
+    timestamp: Optional[float] = None
+
+
+class CommandResultPayload(BaseModel):
+    """The extension's outcome for a claimed browser command."""
+
+    ok: bool = True
+    result: Optional[Any] = None
+    error: Optional[str] = None
 
 
 @app.get("/api/files")
@@ -99,6 +146,57 @@ def health():
         "provider": service.provider_name,
         "session_id": service.current_session(),
     }
+
+
+# --- browser context (ASTRA Firefox extension) -------------------------------
+@app.post("/api/browser/context")
+def put_browser_context(payload: BrowserContextPayload):
+    """Receive a page snapshot from the ASTRA browser extension.
+
+    The stored snapshot is what the core's ``browser_context`` tool reads, so the
+    agent can explain or reason about the page the user is viewing.
+    """
+    data = payload.model_dump(exclude_none=True)
+    stored = set_browser_context(data)
+    return {"ok": True, "received_at": stored.get("received_at")}
+
+
+@app.get("/api/browser/context")
+def read_browser_context():
+    """Return the latest stored page snapshot (for debugging / status)."""
+    return {"context": get_browser_context()}
+
+
+@app.delete("/api/browser/context")
+def delete_browser_context():
+    """Forget the stored page snapshot (the extension disconnected)."""
+    clear_browser_context()
+    return {"ok": True}
+
+
+@app.get("/api/browser/commands")
+def poll_browser_commands():
+    """Hand the extension the next queued browser command, if any.
+
+    The extension polls this endpoint while integration is on; each poll returns
+    at most one ``{id, name, arguments}`` command (or ``command: null``).
+    """
+    return command_poll_payload()
+
+
+@app.post("/api/browser/commands/{command_id}/result")
+def browser_command_result(command_id: int, payload: CommandResultPayload):
+    """Register the extension's result for a claimed browser command.
+
+    Wakes the tool that is blocking on the command and lets it return to the
+    model. Returns 404 when the command is unknown or already finished.
+    """
+    accepted = submit_command_result(
+        command_id, ok=payload.ok, result=payload.result, error=payload.error
+    )
+    if not accepted:
+        raise HTTPException(status_code=404, detail="Command not found or already finished")
+    return {"accepted": True}
 
 
 # --- provider configuration --------------------------------------------------
