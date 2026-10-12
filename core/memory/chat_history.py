@@ -12,6 +12,11 @@ class ChatHistory:
         try:
             self.conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30.0)
             self.conn.row_factory = sqlite3.Row
+            # Enforce foreign keys so deleting a conversation actually removes
+            # its messages (ON DELETE CASCADE). Without this pragma SQLite
+            # silently ignores the cascade and deleted conversations leave
+            # orphaned messages behind.
+            self.conn.execute("PRAGMA foreign_keys = ON")
             self._init_schema()
         except sqlite3.Error as e:
             raise RuntimeError(f"Failed to connect to database: {e}") from e

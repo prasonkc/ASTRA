@@ -1,0 +1,5 @@
+# ASTRA Web backend dependencies.
+# The core's own dependencies live in the repository-root requirements.txt
+# and are installed alongside these by the web/astra-web launcher.
+fastapi>=0.115
+uvicorn>=0.30

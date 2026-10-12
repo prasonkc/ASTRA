@@ -133,12 +133,15 @@ class OllamaModel:
             if not tool_calls:
                 # Persist the assistant's final answer. The core owns
                 # conversation persistence, so the terminal app and the web
-                # wrapper stay consistent.
-                try:
-                    self.history.append({"role": "assistant", "content": content})
-                    self.chat_history.add_message(self.session_id, "assistant", content)
-                except Exception as e:
-                    print(warning(f"Warning: Failed to save assistant response: {e}"))
+                # wrapper stay consistent. Skip replies that produced no text
+                # at all — persisting an empty assistant message would leave a
+                # blank "(no response)" turn behind in history.
+                if content and content.strip():
+                    try:
+                        self.history.append({"role": "assistant", "content": content})
+                        self.chat_history.add_message(self.session_id, "assistant", content)
+                    except Exception as e:
+                        print(warning(f"Warning: Failed to save assistant response: {e}"))
                 return
 
             # Convert tool_calls to serializable dicts

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#000000" />
+  <title>ASTRA</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark">A</div>
+        <div class="brand-text">
+          <span class="brand-name">ASTRA</span>
+          <span class="brand-sub">academic assistant</span>
+        </div>
+      </div>
+
+      <button class="new-chat" id="new-chat">
+        <span class="plus">+</span> New chat
+      </button>
+
+      <div class="sessions-label">Conversations</div>
+      <div class="session-list" id="session-list"></div>
+
+      <div class="sidebar-footer">
+        <div class="status" id="status">
+          <span class="dot" id="status-dot"></span>
+          <span id="status-text">connecting…</span>
+        </div>
+        <div class="model-badge" id="model-badge">model</div>
+      </div>
+    </aside>
+
+    <div class="scrim" id="scrim"></div>
+
+    <main class="chat">
+      <header class="chat-header">
+        <button class="icon-btn only-mobile" id="menu-toggle" aria-label="Toggle sidebar">☰</button>
+        <div class="chat-title">
+          <span id="chat-title-text">New conversation</span>
+        </div>
+        <div class="header-actions">
+          <span class="badge" id="header-model">astra</span>
+        </div>
+      </header>
+
+      <div class="messages" id="messages">
+        <div class="empty-state" id="empty-state">
+          <div class="empty-logo">A</div>
+          <h1>Hello, I'm ASTRA.</h1>
+          <p>Your study companion. Ask a question, upload a topic, or request research — I can search the web, run tools, and help you learn.</p>
+          <div class="suggestions">
+            <button data-suggest="Explain the difference between mitosis and meiosis.">Explain a concept</button>
+            <button data-suggest="Search the web for the latest research on climate change and summarize it.">Search &amp; summarize</button>
+            <button data-suggest="Help me outline an essay about renewable energy.">Outline an essay</button>
+            <button data-suggest="Create a study plan for my upcoming exams.">Make a study plan</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="composer-inner">
+          <textarea id="input" rows="1" placeholder="Message ASTRA…  (Enter to send, Shift+Enter for a new line)"></textarea>
+          <button class="send-btn" id="send" aria-label="Send">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.993.993 0 00-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/></svg>
+          </button>
+          <button class="stop-btn" id="stop" hidden>Stop</button>
+        </div>
+        <div class="composer-hint">ASTRA runs locally · powered by your Ollama model</div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
