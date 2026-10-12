@@ -88,7 +88,23 @@ class AgentModel:
             ),
             "model": self.model_name,
             "session_id": self.session_id,
+            "thinking": self.thinking_enabled(),
+            "thinking_source": self.settings.thinking_source(),
         }
+
+    def thinking_enabled(self) -> bool:
+        """Whether the model should emit reasoning ("thinking") tokens.
+
+        Read straight from settings on every call so toggling it at runtime
+        (``/thinking`` or the web checkbox) takes effect on the next turn
+        without reconfiguring the backend.
+        """
+        return self.settings.thinking()
+
+    def set_thinking(self, enabled: bool) -> bool:
+        """Persist the thinking toggle and return the effective value."""
+        self.settings.set_thinking(enabled)
+        return self.thinking_enabled()
 
     def reconfigure(
         self,
@@ -169,7 +185,7 @@ class AgentModel:
                     model=self.model_name,
                     messages=self.history,
                     tools=relevant_tools,
-                    think=True,
+                    think=self.thinking_enabled(),
                 )
             except ProviderError as e:
                 yield _ErrorChunk(str(e))

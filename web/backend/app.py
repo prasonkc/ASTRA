@@ -49,6 +49,11 @@ class ProviderRequest(BaseModel):
     model: Optional[str] = None
     api_key: Optional[str] = None
     base_url: Optional[str] = None
+    thinking: Optional[bool] = None
+
+
+class ThinkingRequest(BaseModel):
+    thinking: bool
 
 
 class LocalSetupRequest(BaseModel):
@@ -111,8 +116,17 @@ def set_provider(payload: ProviderRequest):
         model=payload.model,
         api_key=payload.api_key,
         base_url=payload.base_url,
+        thinking=payload.thinking,
     )
     return {"ok": True, "live": snapshot, "config": get_service().get_config()}
+
+
+@app.post("/api/thinking")
+def set_thinking(payload: ThinkingRequest):
+    """Toggle reasoning ("thinking") on/off for the active model."""
+    service = get_service()
+    enabled = service.set_thinking(payload.thinking)
+    return {"ok": True, "thinking": enabled, "config": service.get_config()}
 
 
 @app.get("/api/providers/ollama/status")

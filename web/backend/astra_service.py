@@ -167,7 +167,7 @@ class AstraService:
         except Exception:
             pass
 
-    def _op_set_provider(self, provider, model, api_key, base_url) -> Dict:
+    def _op_set_provider(self, provider, model, api_key, base_url, thinking=None) -> Dict:
         """Persist the selected provider/model (and key/url) and swap the backend."""
         settings = settings_module.get_settings()
         provider = settings_module.normalize_provider(provider)
@@ -175,6 +175,8 @@ class AstraService:
             settings.set_api_key(provider, api_key)
         if base_url is not None:
             settings.set_base_url(provider, base_url)
+        if thinking is not None:
+            settings.set_thinking(thinking)
         settings.set_active(provider, model)
         resolved = settings.active_model(provider)
         snapshot = self.model.reconfigure(provider, resolved)
@@ -238,9 +240,21 @@ class AstraService:
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        thinking: Optional[bool] = None,
     ) -> Dict:
         """Persist and activate a provider/model. Runs on the core worker."""
-        return self._call(self._op_set_provider, provider, model, api_key, base_url)
+        return self._call(self._op_set_provider, provider, model, api_key, base_url, thinking)
+
+    def set_thinking(self, enabled: bool) -> bool:
+        """Toggle thinking for the active model and return the effective value.
+
+        Writes straight to settings (which has its own lock) instead of going
+        through the core worker, so it stays responsive even while a long reply
+        is streaming — the agent loop reads the flag on its next model call.
+        """
+        settings = settings_module.get_settings()
+        settings.set_thinking(enabled)
+        return settings.thinking()
 
     def local_status(self) -> Dict:
         settings = settings_module.get_settings()

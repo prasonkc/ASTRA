@@ -126,6 +126,7 @@ installer. There are also direct commands:
 /provider gemini          # add a Google (Gemini) key
 /provider set <p> [model] # set the active provider (and model) directly
 /model [name]             # show or switch the model for the current provider
+/thinking [on|off]        # toggle reasoning for the active model
 ```
 
 API keys are read with a hidden prompt (nothing is echoed) and stored in
@@ -140,10 +141,13 @@ in from the right; close it with its **×**, by clicking outside it, or with
 The sidebar shows everything in one scroll:
 
 1. **Currently active** — a banner with the active provider and model.
-2. **Where should ASTRA run?** — the four providers as a list, each with its
+2. **Thinking** — a checkbox that turns the active model's reasoning output on
+   or off (the web equivalent of `/thinking`). When `ASTRA_THINKING` is set the
+   checkbox is shown locked.
+3. **Where should ASTRA run?** — the four providers as a list, each with its
    live status (`Running · 3 models`, `API key saved`, `Needs an API key`, …).
    The active one is highlighted; tap any provider to show its settings below.
-3. **The selected provider's settings:**
+4. **The selected provider's settings:**
    - **Local (Ollama):** tap any already-installed model to use it instantly, or
      download a new one.
    - **Cloud:** paste your API key and confirm or change the model, then press
@@ -246,6 +250,7 @@ Configuration is resolved in this order of precedence (highest first):
 {
   "provider": "openai",
   "model": "gpt-4o-mini",
+  "thinking": true,
   "providers": {
     "openai": {
       "api_key": "sk-…",
@@ -264,6 +269,7 @@ Configuration is resolved in this order of precedence (highest first):
 |----------|---------|---------|
 | `ASTRA_PROVIDER` | `ollama` | Active provider: `ollama`, `openai`, `anthropic`, `gemini` |
 | `ASTRA_MODEL` | per provider | Model name for the active provider |
+| `ASTRA_THINKING` | `true` | Reasoning output on/off (`1/0`, `on/off`, `true/false`) |
 | `ASTRA_OPENAI_API_KEY` / `OPENAI_API_KEY` | — | OpenAI key |
 | `ASTRA_ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` | — | Anthropic (Claude) key |
 | `ASTRA_GEMINI_API_KEY` / `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Google (Gemini) key |
@@ -308,6 +314,7 @@ Base URLs must not include a trailing slash (it is stripped automatically).
 /provider gemini          Add a Google (Gemini) key
 /provider set <p> [model] Set the active provider (and model) directly
 /model [name]             Show or switch the model for the current provider
+/thinking [on|off|toggle] Toggle reasoning for the active model
 /provider help            Show help
 ```
 
@@ -367,9 +374,13 @@ when a backend doesn't supply one.
 
 Provider-specific notes:
 
-- **Thinking / reasoning:** `think=True` is effectively Ollama-only. Gemini’s
-  thought parts are captured automatically. OpenAI and Anthropic reasoning is off
-  by default.
+- **Thinking / reasoning:** the `/thinking` command and the web **Thinking**
+  checkbox set the `think` flag passed to the provider; the value is stored as
+  `thinking` in settings (env `ASTRA_THINKING` wins). It is read on every model
+  call, so toggling it takes effect on the next turn without a restart. It is
+  acted on by backends that support reasoning — chiefly Ollama models such as
+  `qwen3`. Gemini's thought parts are captured automatically; OpenAI and
+  Anthropic ignore the flag.
 - **Streaming:** all providers stream over SSE. Cloud providers use `requests`
   directly (no vendor SDK).
 
@@ -394,6 +405,7 @@ The FastAPI backend exposes:
 | `GET` | `/api/files?path=…` | Serve a generated file (core-scoped) |
 | `GET` | `/api/providers` | Provider config (**keys masked**) |
 | `POST` | `/api/providers` | Activate provider/model, save key/base URL |
+| `POST` | `/api/thinking` | Toggle reasoning for the active model |
 | `GET` | `/api/providers/ollama/status` | Ollama install/run state + model list |
 | `POST` | `/api/providers/ollama/setup` | Install Ollama + pull a model (NDJSON) |
 
@@ -422,6 +434,14 @@ curl -s http://127.0.0.1:8765/api/providers | jq
 curl -s -X POST http://127.0.0.1:8765/api/providers \
   -H 'Content-Type: application/json' \
   -d '{"provider":"openai","model":"gpt-4o-mini","api_key":"sk-…"}' | jq
+```
+
+### Example: toggle thinking over HTTP
+
+```bash
+curl -s -X POST http://127.0.0.1:8765/api/thinking \
+  -H 'Content-Type: application/json' \
+  -d '{"thinking":false}' | jq
 ```
 
 ---

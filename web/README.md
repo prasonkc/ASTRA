@@ -49,6 +49,7 @@ precedence:
 |-------------------------------|----------------------------|-------------------------------------------|
 | `ASTRA_PROVIDER`              | `ollama`                   | `ollama`, `openai`, `anthropic`, `gemini` |
 | `ASTRA_MODEL`                 | per provider (see below)   | Model name for the active provider        |
+| `ASTRA_THINKING`              | `true`                     | Reasoning output on/off for the active model |
 | `ASTRA_OPENAI_API_KEY` / `OPENAI_API_KEY` | — | OpenAI API key                |
 | `ASTRA_ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` | — | Anthropic (Claude) API key |
 | `ASTRA_GEMINI_API_KEY` / `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Google (Gemini) API key |
@@ -101,6 +102,7 @@ Supported API:
 | GET      | `/api/files?path=…`                | Serve a generated file           |
 | GET      | `/api/providers`                   | Provider config (keys masked)    |
 | POST     | `/api/providers`                   | Activate provider/model + save key |
+| POST     | `/api/thinking`                    | Toggle reasoning for the active model |
 | GET      | `/api/providers/ollama/status`     | Ollama install/run + model list  |
 | POST     | `/api/providers/ollama/setup`      | Install Ollama + pull a model (NDJSON) |
 
@@ -115,9 +117,13 @@ model badge). It lets you:
 * **OpenAI / Anthropic (Claude) / Google (Gemini)** — paste an API key and pick
   a model. Keys are stored in `core/config/settings.json` (mode `600`) and never
   sent back to the browser (only a masked form is ever returned).
+* **Thinking** — a checkbox that toggles the active model's reasoning output
+  (the web equivalent of `/thinking`). It is shown locked when `ASTRA_THINKING`
+  is set in the environment.
 
-The same actions are available in the terminal app via the `/provider` command
-(run `/provider help`). Because both use `ai.settings`, the choice is shared.
+The same actions are available in the terminal app via the `/provider` and
+`/thinking` commands (run `/provider help`). Because both use `ai.settings`, the
+choice is shared.
 
 ### Chat stream events
 

@@ -107,7 +107,8 @@ cloud provider (OpenAI, Anthropic, Gemini). See §6.
 | `delete_session_by_index(index)` | Delegates to ChatHistory |
 | `clear_all_sessions()` | Delegates to ChatHistory |
 | `generate(prompt, on_event=None)` | Main generation loop with tool calling |
-| `describe()` | Returns `{provider, provider_label, model, session_id}` |
+| `describe()` | Returns `{provider, provider_label, model, session_id, thinking}` |
+| `thinking_enabled()` / `set_thinking(bool)` | Read/toggle reasoning for the active model |
 | `reconfigure(provider, model)` | Switch provider/model without touching history |
 | `close()` | Closes ChatHistory connection |
 
@@ -305,11 +306,11 @@ protocol.
 
 **Configuration precedence** (highest first):
 
-1. `ASTRA_PROVIDER` / `ASTRA_MODEL` and per-provider `*_API_KEY` / `*_BASE_URL`
-   environment variables,
+1. `ASTRA_PROVIDER` / `ASTRA_MODEL` / `ASTRA_THINKING` and per-provider
+   `*_API_KEY` / `*_BASE_URL` environment variables,
 2. `core/config/settings.json` (written by `/provider` / the web Settings panel;
    git-ignored, mode `600`),
-3. built-in defaults (`ollama`, `qwen3:14b`).
+3. built-in defaults (`ollama`, `qwen3:14b`, thinking on).
 
 `Settings.to_public()` returns a snapshot with API keys **masked**, which is what
 the web UI and `/provider status` display — the raw key never leaves the process.
@@ -326,6 +327,7 @@ the web UI and `/provider status` display — the raw key never leaves the proce
 /provider gemini          Add a Google (Gemini) key
 /provider set <p> [model] Set the active provider (and model) directly
 /model [name]             Show or switch the model for the current provider
+/thinking [on|off|toggle] Toggle reasoning for the active model
 ```
 
 ---

@@ -749,6 +749,53 @@
     return { ollama: "🖥️", openai: "✦", anthropic: "✳", gemini: "✧" }[name] || "•";
   }
 
+  function renderThinkingRow(cfg) {
+    const live = cfg.live || {};
+    const enabled = live.thinking !== undefined ? !!live.thinking : !!cfg.thinking;
+    const fromEnv = !!cfg.thinking_from_env;
+    const model = live.model || cfg.model || "";
+
+    const box = el("input", { type: "checkbox" });
+    box.checked = enabled;
+    box.disabled = fromEnv;
+
+    const row = el("label", { class: "thinking-row" + (enabled ? " on" : "") }, [
+      box,
+      el("span", { class: "tr-text" }, [
+        el("span", { class: "tr-title", text: "Thinking" }),
+        el("span", {
+          class: "tr-hint",
+          text: fromEnv
+            ? "Locked by the ASTRA_THINKING environment variable"
+            : (enabled ? "Reasoning shown for " : "Reasoning hidden for ") + (model || "this model"),
+        }),
+      ]),
+    ]);
+
+    if (!fromEnv) {
+      box.addEventListener("change", async () => {
+        box.disabled = true;
+        try {
+          const res = await api("/api/thinking", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ thinking: box.checked }),
+          });
+          settingsConfig = res.config;
+          applyConfigToUI(settingsConfig);
+          toast("Thinking " + (res.thinking ? "on" : "off"), "success");
+          renderSettings();
+        } catch (e) {
+          box.checked = !box.checked;
+          box.disabled = false;
+          toast("Could not update thinking: " + e.message, "error");
+        }
+      });
+    }
+
+    return row;
+  }
+
   function toast(message, kind) {
     if (!toastWrap) return;
     const node = el("div", { class: "toast " + (kind || "info") }, [
@@ -812,6 +859,8 @@
         ]),
       ])
     );
+
+    settingsBody.appendChild(renderThinkingRow(cfg));
 
     settingsBody.appendChild(el("h3", { class: "step-title", text: "Where should ASTRA run?" }));
     settingsBody.appendChild(

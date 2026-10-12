@@ -66,6 +66,29 @@ _BASE_ENV: Dict[str, tuple] = {
 
 _ENV_PROVIDER = "ASTRA_PROVIDER"
 _ENV_MODEL = "ASTRA_MODEL"
+_ENV_THINKING = "ASTRA_THINKING"
+
+# Whether the model reasons ("thinks") before answering. Only backends that
+# support reasoning (e.g. Ollama models like qwen3) act on this; others ignore
+# it. Default preserves ASTRA's historical behaviour of asking for thinking.
+DEFAULT_THINKING = True
+
+_TRUE_WORDS = ("1", "true", "yes", "on", "enable", "enabled", "y")
+_FALSE_WORDS = ("0", "false", "no", "off", "disable", "disabled", "n")
+
+
+def _parse_bool(value) -> Optional[bool]:
+    """Coerce common truthy/falsey spellings to ``bool`` (or ``None``)."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in _TRUE_WORDS:
+        return True
+    if text in _FALSE_WORDS:
+        return False
+    return None
 
 
 def default_settings_path() -> Path:
@@ -249,6 +272,32 @@ class Settings:
                 cfg.pop("base_url", None)
             self.save()
 
+    # ---- thinking / reasoning ----------------------------------------------
+    def thinking(self) -> bool:
+        """Whether the active model should emit reasoning ("thinking") tokens.
+
+        Precedence matches the rest of the settings: ``ASTRA_THINKING`` wins,
+        then the saved value, then :data:`DEFAULT_THINKING`.
+        """
+        env = _parse_bool(os.environ.get(_ENV_THINKING))
+        if env is not None:
+            return env
+        stored = _parse_bool(self._data.get("thinking"))
+        return DEFAULT_THINKING if stored is None else stored
+
+    def thinking_source(self) -> str:
+        """Where :meth:`thinking` resolved from: ``"env"``, ``"file"`` or ``"default"``."""
+        if _parse_bool(os.environ.get(_ENV_THINKING)) is not None:
+            return "env"
+        if _parse_bool(self._data.get("thinking")) is not None:
+            return "file"
+        return "default"
+
+    def set_thinking(self, enabled: bool) -> None:
+        with self._lock:
+            self._data["thinking"] = bool(enabled)
+            self.save()
+
     def provider_options(self, provider: str) -> Dict[str, Any]:
         provider = normalize_provider(provider)
         cfg = self._provider_config(provider)
@@ -291,6 +340,8 @@ class Settings:
             "provider": provider,
             "model": self.active_model(),
             "providers": providers,
+            "thinking": self.thinking(),
+            "thinking_from_env": self.thinking_source() == "env",
             "env_provider_locked": bool(os.environ.get(_ENV_PROVIDER)),
             "env_model_locked": bool(os.environ.get(_ENV_MODEL)),
         }

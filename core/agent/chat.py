@@ -30,7 +30,7 @@ class Chat:
         except Exception:
             pass
         print(dim("Session commands: /s new | /s list | /s <num> | /s resume | /s del <num> | /s clear"))
-        print(dim("Provider: /provider (local_setup · openai · anthropic · gemini) | /model <name>"))
+        print(dim("Provider: /provider (local_setup · openai · anthropic · gemini) | /model <name> | /thinking on|off"))
         self._safe_show_current_session()
 
         while True:
@@ -52,8 +52,8 @@ class Chat:
                 if user_input.strip() == "":
                     continue
 
-                # Handle provider/model setup commands
-                if user_input.startswith("/provider") or user_input.startswith("/model"):
+                # Handle provider/model/thinking setup commands
+                if user_input.startswith("/provider") or user_input.startswith("/model") or user_input.startswith("/thinking"):
                     self.provider_controller.handle(user_input)
                     continue
 

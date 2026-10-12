@@ -37,6 +37,9 @@ class ProviderController:
             if cmd in ("/model", "/models"):
                 self._model_command(parts[1:])
                 return True
+            if cmd in ("/thinking", "/think"):
+                self._thinking_command(parts[1:])
+                return True
             if cmd not in ("/provider", "/providers"):
                 return False
 
@@ -265,6 +268,44 @@ class ProviderController:
             return
         self._apply(provider, model=args[0])
 
+    # ---- thinking command ---------------------------------------------------
+    def _thinking_command(self, args: List[str]):
+        """Toggle or set whether the active model emits reasoning tokens."""
+        if args and args[0].lower() in ("status", "show", "current"):
+            self._print_thinking()
+            return
+
+        enabled: Optional[bool] = None
+        if args:
+            word = args[0].strip().lower()
+            if word not in ("toggle", "switch"):
+                enabled = settings_module._parse_bool(word)
+                if enabled is None:
+                    print(error("Usage: /thinking [on|off|toggle|status]"))
+                    return
+
+        if enabled is None:
+            enabled = not self.model.thinking_enabled()
+
+        self.model.set_thinking(enabled)
+        effective = self.model.thinking_enabled()
+        state = success("on") if effective else warning("off")
+        print(info(
+            f"Thinking is {state} for {bold(self.model.model_name)} "
+            f"({self.model.provider_name})."
+        ))
+        if self.settings.thinking_source() == "env":
+            print(warning("ASTRA_THINKING is set in the environment and overrides this toggle."))
+
+    def _print_thinking(self):
+        enabled = self.model.thinking_enabled()
+        state = success("on") if enabled else warning("off")
+        source = self.settings.thinking_source()
+        print(info(
+            f"Thinking is {state} for {bold(self.model.model_name)} "
+            f"({self.model.provider_name})  [source: {source}]"
+        ))
+
     # ---- apply --------------------------------------------------------------
     def _apply(self, provider: str, model: Optional[str] = None):
         provider = settings_module.normalize_provider(provider)
@@ -360,9 +401,10 @@ class ProviderController:
   /provider gemini          Add a Google (Gemini) API key
   /provider set <p> [model] Set the active provider (and model) directly
   /model [name]             Show or switch the model for the current provider
+  /thinking [on|off|toggle] Toggle thinking/reasoning for the active model
   /provider help            Show this help
 
 Environment variables always win over saved settings:
-  ASTRA_PROVIDER, ASTRA_MODEL,
+  ASTRA_PROVIDER, ASTRA_MODEL, ASTRA_THINKING,
   ASTRA_OPENAI_API_KEY, ASTRA_ANTHROPIC_API_KEY, ASTRA_GEMINI_API_KEY
         """.strip())
