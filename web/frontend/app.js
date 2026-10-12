@@ -9,6 +9,7 @@
   let sessionsCache = [];
   let settingsConfig = null;
   let selectedProvider = null;
+  let settingsView = "choose"; // "choose" | "configure"
 
   // ---- DOM -----------------------------------------------------------------
   const $ = (id) => document.getElementById(id);
@@ -30,7 +31,9 @@
   const settingsBtn = $("settings-btn");
   const settingsModal = $("settings-modal");
   const settingsClose = $("settings-close");
+  const settingsBack = $("settings-back");
   const settingsBody = $("settings-body");
+  const toastWrap = $("toast-wrap");
   const composerHint = $("composer-hint");
 
   // ---- helpers -------------------------------------------------------------
@@ -743,7 +746,25 @@
     }
   }
 
+  function providerIcon(name) {
+    return { ollama: "🖥️", openai: "✦", anthropic: "✳", gemini: "✧" }[name] || "•";
+  }
+
+  function toast(message, kind) {
+    if (!toastWrap) return;
+    const node = el("div", { class: "toast " + (kind || "info") }, [
+      el("span", { class: "toast-dot" }),
+      el("span", { text: message }),
+    ]);
+    toastWrap.appendChild(node);
+    setTimeout(() => {
+      node.classList.add("toast-out");
+      setTimeout(() => node.remove(), 260);
+    }, 3400);
+  }
+
   function openSettings() {
+    settingsView = "choose";
     settingsModal.hidden = false;
     settingsBody.innerHTML = '<p class="modal-loading">Loading…</p>';
     loadConfig()
@@ -772,99 +793,144 @@
     if (!cfg) return;
     if (!selectedProvider) selectedProvider = cfg.provider;
     settingsBody.innerHTML = "";
+    if (settingsView === "choose") renderChoose(cfg);
+    else renderConfigure(cfg, selectedProvider);
+  }
+
+  function renderChoose(cfg) {
+    settingsBack.hidden = true;
 
     const live = cfg.live || {};
+    const activeLabel = (cfg.providers[cfg.provider] || {}).label || cfg.provider;
     settingsBody.appendChild(
-      el("p", { class: "current-line" }, [
-        "Active: ",
-        el("b", { text: (cfg.providers[cfg.provider] || {}).label || cfg.provider }),
-        " · ",
-        el("b", { text: live.model || cfg.model }),
+      el("div", { class: "active-banner" }, [
+        el("span", { class: "ab-check", text: "✓" }),
+        el("div", {}, [
+          el("div", { class: "ab-title", text: "Currently active" }),
+          el("div", { class: "ab-sub", text: activeLabel + " · " + (live.model || cfg.model) }),
+        ]),
       ])
+    );
+
+    settingsBody.appendChild(el("h3", { class: "step-title", text: "Where should ASTRA run?" }));
+    settingsBody.appendChild(
+      el("p", {
+        class: "step-sub",
+        text: "Local models run on this machine. Cloud providers use your own API key.",
+      })
     );
 
     const grid = el("div", { class: "provider-grid" });
     for (const [name, info] of Object.entries(cfg.providers)) {
       const isActive = name === cfg.provider;
-      let dotClass, meta;
+      let dotClass, statusText;
       if (name === "ollama") {
         const running = !!(cfg.ollama && cfg.ollama.running);
+        const installed = !!(cfg.ollama && cfg.ollama.installed);
+        const count = cfg.ollama && cfg.ollama.models ? cfg.ollama.models.length : 0;
         dotClass = "pc-dot " + (running ? "ok" : "warn");
-        const count = (cfg.ollama && cfg.ollama.models ? cfg.ollama.models.length : 0);
-        meta = running ? count + " model" + (count === 1 ? "" : "s") + " installed" : "not running";
+        statusText = running
+          ? "Running · " + count + " model" + (count === 1 ? "" : "s")
+          : installed
+          ? "Installed · not running"
+          : "Not installed yet";
       } else {
         dotClass = "pc-dot " + (info.configured ? "ok" : "warn");
-        meta = info.configured ? "key set · " + info.model : "no API key yet";
+        statusText = info.configured ? "API key saved" : "Needs an API key";
       }
       grid.appendChild(
         el(
           "button",
           {
-            class: "provider-card" + (name === selectedProvider ? " active" : ""),
+            class: "provider-card" + (isActive ? " active" : ""),
             type: "button",
             onclick: () => {
               selectedProvider = name;
+              settingsView = "configure";
               renderSettings();
             },
           },
           [
-            el("div", { class: "pc-name" }, [
+            el("div", { class: "pc-top" }, [
+              el("span", { class: "pc-icon", text: providerIcon(name) }),
               el("span", { class: dotClass }),
-              info.label + (isActive ? " ✓" : ""),
+              isActive ? el("span", { class: "pc-tag", text: "Active" }) : null,
             ]),
-            el("div", { class: "pc-meta", text: meta }),
+            el("div", { class: "pc-name", text: info.label }),
+            el("div", { class: "pc-meta", text: statusText }),
+            el("div", { class: "pc-go", text: "Configure →" }),
           ]
         )
       );
     }
     settingsBody.appendChild(grid);
+  }
 
-    const section = el("div", { class: "settings-section" });
-    settingsBody.appendChild(section);
-    if (selectedProvider === "ollama") renderOllamaSection(section, cfg);
-    else renderCloudSection(section, cfg, selectedProvider);
+  function renderConfigure(cfg, name) {
+    settingsBack.hidden = false;
+    const info = cfg.providers[name] || {};
+    const isActive = name === cfg.provider;
+    settingsBody.appendChild(
+      el("div", { class: "configure-head" }, [
+        el("span", { class: "pc-icon big", text: providerIcon(name) }),
+        el("div", {}, [
+          el("div", { class: "configure-title", text: info.label || name }),
+          el("div", { class: "configure-sub", text: isActive ? "Active provider" : "Not active yet" }),
+        ]),
+        isActive ? el("span", { class: "pc-tag", text: "Active" }) : null,
+      ])
+    );
+
+    if (name === "ollama") renderOllamaSection(settingsBody, cfg);
+    else renderCloudSection(settingsBody, cfg, name);
   }
 
   function renderCloudSection(section, cfg, name) {
     const info = cfg.providers[name] || {};
-    section.appendChild(el("h3", { text: info.label || name }));
+    const isActive = name === cfg.provider;
+
+    if (info.api_key_from_env) {
+      section.appendChild(
+        el("div", { class: "callout" }, [
+          "This API key comes from an environment variable, which overrides anything saved here.",
+        ])
+      );
+    }
 
     const keyInput = el("input", {
       type: "password",
       autocomplete: "off",
       placeholder: info.api_key_masked
-        ? "saved (" + info.api_key_masked + ") — type to replace"
-        : "paste your API key",
+        ? "Saved (" + info.api_key_masked + ") — type to replace"
+        : "Paste your API key",
     });
     const modelInput = el("input", { type: "text", value: info.model || info.default_model || "" });
-    const baseInput = el("input", { type: "text", value: info.base_url || "" });
 
     section.appendChild(
       fieldEl(
         "API key",
         keyInput,
-        info.api_key_from_env
-          ? "Set by an environment variable (overrides this field)."
-          : "Stored locally in core/config/settings.json (file mode 600)."
+        info.api_key_from_env ? null : "Stored only on this machine and never sent back to the browser."
       )
     );
-    section.appendChild(fieldEl("Model", modelInput, ""));
+    section.appendChild(fieldEl("Model", modelInput, "Keep the default or type any model name."));
+
+    const baseInput = el("input", { type: "text", value: info.base_url || "" });
     section.appendChild(
       el("details", { class: "advanced" }, [
-        el("summary", { text: "Advanced (base URL)" }),
+        el("summary", { text: "Advanced — base URL" }),
         fieldEl("Base URL", baseInput, "For proxies or OpenAI-compatible endpoints."),
       ])
     );
 
-    const msg = el("p", { class: "settings-note" });
+    const defaultLabel = info.configured && isActive ? "Save changes" : "Connect & activate";
     const saveBtn = el("button", {
-      class: "btn primary",
+      class: "btn primary wide",
       type: "button",
-      text: "Save & activate",
+      text: defaultLabel,
       onclick: async () => {
         saveBtn.disabled = true;
-        msg.className = "settings-note";
-        msg.textContent = "Saving…";
+        saveBtn.textContent = "Connecting…";
         try {
           const payload = { provider: name, model: modelInput.value.trim() || undefined };
           if (keyInput.value.trim()) payload.api_key = keyInput.value.trim();
@@ -876,67 +942,74 @@
             body: JSON.stringify(payload),
           });
           settingsConfig = res.config;
-          selectedProvider = name;
           applyConfigToUI(settingsConfig);
+          const used = (res.live && res.live.model) || modelInput.value.trim();
+          toast("Now using " + (info.label || name) + " · " + used, "success");
+          settingsView = "choose";
           renderSettings();
         } catch (e) {
-          msg.className = "settings-error";
-          msg.textContent = e.message;
+          toast("Could not connect: " + e.message, "error");
           saveBtn.disabled = false;
+          saveBtn.textContent = defaultLabel;
         }
       },
     });
-    section.appendChild(el("div", { class: "btn-row" }, [saveBtn]));
-    section.appendChild(msg);
+    section.appendChild(saveBtn);
   }
 
   function renderOllamaSection(section, cfg) {
     const local = cfg.ollama || {};
     const running = !!local.running;
-    section.appendChild(el("h3", { text: "Local models (Ollama)" }));
+
     section.appendChild(
       el("div", { class: "status-row" }, [
         el("span", { class: "pc-dot " + (running ? "ok" : "warn") }),
-        running
-          ? "Ollama is running"
-          : local.installed
-          ? "Ollama is installed but not running"
-          : "Ollama is not installed on this machine",
-        local.version ? el("span", { text: " · " + local.version }) : null,
+        el("span", {
+          text: running
+            ? "Ollama is running"
+            : local.installed
+            ? "Ollama is installed but not running"
+            : "Ollama is not installed on this machine",
+        }),
+        local.version ? el("span", { class: "muted", text: " · " + local.version }) : null,
       ])
     );
 
     const models = local.models || [];
-    const chips = el("div", { class: "chips" });
     const activeModel = (cfg.live || {}).model;
-    for (const m of models) {
-      chips.appendChild(
-        el("button", {
-          class: "chip" + (m.name === activeModel ? " active" : ""),
-          type: "button",
-          text: m.name,
-          title: m.size_human || "",
-          onclick: () => activateModel("ollama", m.name),
-        })
+    if (running && models.length) {
+      section.appendChild(el("label", { class: "field-label", text: "Installed models — tap to use" }));
+      const chips = el("div", { class: "chips" });
+      for (const m of models) {
+        chips.appendChild(
+          el("button", {
+            class: "chip" + (m.name === activeModel ? " active" : ""),
+            type: "button",
+            text: m.name,
+            title: m.size_human || "",
+            onclick: () => activateModel("ollama", m.name),
+          })
+        );
+      }
+      section.appendChild(chips);
+    } else if (running) {
+      section.appendChild(
+        el("p", { class: "settings-note", text: "No models installed yet — download one below." })
       );
     }
-    section.appendChild(chips);
 
+    section.appendChild(el("div", { class: "divider" }));
+    section.appendChild(el("label", { class: "field-label", text: "Download a model" }));
     section.appendChild(
       el("p", {
         class: "settings-note",
-        text: "Download another model. On a fresh machine, tick “Install Ollama” to set everything up.",
+        text: "Pick a recommended model below or type any Ollama tag.",
       })
     );
 
-    const modelInput = el("input", { type: "text", placeholder: "e.g. qwen3:14b" });
     const rec = local.recommended || [];
+    const modelInput = el("input", { type: "text", placeholder: "e.g. qwen3:14b" });
     if (rec.length) {
-      modelInput.setAttribute("list", "rec-models");
-      const datalist = el("datalist", { id: "rec-models" });
-      for (const r of rec) datalist.appendChild(el("option", { value: r.name, label: r.name }));
-      section.appendChild(fieldEl("Model", modelInput, ""));
-      section.appendChild(datalist);
       const recChips = el("div", { class: "chips" });
       for (const r of rec) {
         recChips.appendChild(
@@ -952,23 +1025,31 @@
         );
       }
       section.appendChild(recChips);
-    } else {
-      section.appendChild(fieldEl("Model", modelInput, ""));
     }
+    section.appendChild(modelInput);
 
     const install = el("input", { type: "checkbox", checked: true, id: "install-ollama" });
-    const installLabel = el("label", { class: "settings-note", style: "display:flex;gap:8px;align-items:center;cursor:pointer" }, [
+    const installLabel = el("label", { class: "check-row" }, [
       install,
-      "Install Ollama if missing",
+      el("span", { text: "Install Ollama automatically if it's missing" }),
     ]);
+
+    const progressBar = el("div", { class: "progress-bar-fill" });
+    const progress = el("div", { class: "progress" }, [progressBar]);
+    progress.hidden = true;
     const log = el("div", { class: "setup-log" });
+
     const runBtn = el("button", {
-      class: "btn",
+      class: "btn primary wide",
       type: "button",
       text: "Install & download",
-      onclick: () => runLocalSetup(modelInput.value.trim(), install.checked, log, runBtn),
+      onclick: () =>
+        runLocalSetup(modelInput.value.trim(), install.checked, log, runBtn, progress, progressBar),
     });
-    section.appendChild(el("div", { class: "btn-row" }, [installLabel, runBtn]));
+
+    section.appendChild(installLabel);
+    section.appendChild(runBtn);
+    section.appendChild(progress);
     section.appendChild(log);
   }
 
@@ -981,23 +1062,34 @@
       });
       settingsConfig = res.config;
       applyConfigToUI(settingsConfig);
+      toast("Now using " + model, "success");
       renderSettings();
     } catch (e) {
-      alert("Could not switch model: " + e.message);
+      toast("Could not switch model: " + e.message, "error");
     }
   }
 
-  async function runLocalSetup(model, install, logEl, btn) {
+  async function runLocalSetup(model, install, logEl, btn, progressEl, barEl) {
     logEl.textContent = "";
     if (!model) {
-      logEl.textContent = "Enter or pick a model name first.\n";
+      toast("Enter or pick a model name first.", "error");
       return;
     }
     btn.disabled = true;
+    btn.textContent = "Working…";
+    if (progressEl) {
+      progressEl.hidden = false;
+      barEl.style.width = "0%";
+    }
     const append = (t) => {
       logEl.textContent += String(t) + "\n";
       logEl.scrollTop = logEl.scrollHeight;
     };
+    const setBar = (msg) => {
+      const m = String(msg).match(/(\d+(?:\.\d+)?)%/);
+      if (m && barEl) barEl.style.width = Math.min(100, parseFloat(m[1])) + "%";
+    };
+    let succeeded = false;
     try {
       const res = await fetch("/api/providers/ollama/setup", {
         method: "POST",
@@ -1023,18 +1115,30 @@
           } catch {
             continue;
           }
-          if (evt.type === "progress") append(evt.message);
-          else if (evt.type === "error") append("⚠ " + evt.message);
-          else if (evt.type === "result") append(evt.ok ? "Done." : "Setup did not complete.");
+          if (evt.type === "progress") {
+            append(evt.message);
+            setBar(evt.message);
+          } else if (evt.type === "error") {
+            append("⚠ " + evt.message);
+          } else if (evt.type === "result") {
+            succeeded = !!evt.ok;
+            append(evt.ok ? "Done." : "Setup did not complete.");
+          }
         }
       }
     } catch (e) {
       append("⚠ " + e.message);
     } finally {
       btn.disabled = false;
+      btn.textContent = "Install & download";
+      if (barEl && succeeded) barEl.style.width = "100%";
       try {
         selectedProvider = "ollama";
         await loadConfig();
+        if (succeeded) {
+          toast("Model ready: " + model, "success");
+          settingsView = "configure";
+        }
         renderSettings();
       } catch {
         /* ignore */
@@ -1061,6 +1165,10 @@
   settingsBtn.addEventListener("click", openSettings);
   settingsClose.addEventListener("click", closeSettings);
   modelBadge.addEventListener("click", openSettings);
+  settingsBack.addEventListener("click", () => {
+    settingsView = "choose";
+    renderSettings();
+  });
   settingsModal.addEventListener("click", (e) => {
     if (e.target === settingsModal) closeSettings();
   });

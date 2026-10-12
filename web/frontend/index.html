@@ -44,7 +44,10 @@
           <span id="chat-title-text">New conversation</span>
         </div>
         <div class="header-actions">
-          <button class="icon-btn" id="settings-btn" aria-label="Model and provider settings" title="Model &amp; provider settings">⚙</button>
+          <button class="settings-pill" id="settings-btn" aria-label="Model and provider settings" title="Model &amp; provider settings">
+            <span class="settings-pill-icon" aria-hidden="true">⚙</span>
+            <span class="settings-pill-text">Settings</span>
+          </button>
           <span class="badge" id="header-model">astra</span>
         </div>
       </header>
@@ -79,7 +82,10 @@
   <div class="modal-overlay" id="settings-modal" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <div class="modal-head">
-        <h2 id="settings-title">Model &amp; provider</h2>
+        <div class="modal-head-left">
+          <button class="modal-back" id="settings-back" aria-label="Back to provider list" hidden>←</button>
+          <h2 id="settings-title">Model &amp; provider</h2>
+        </div>
         <button class="modal-close" id="settings-close" aria-label="Close settings">×</button>
       </div>
       <div class="modal-body" id="settings-body">
@@ -87,6 +93,8 @@
       </div>
     </div>
   </div>
+
+  <div class="toast-wrap" id="toast-wrap" aria-live="polite"></div>
 
   <script src="/static/app.js"></script>
 </body>
