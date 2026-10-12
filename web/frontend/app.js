@@ -7,6 +7,8 @@
   let streaming = false;
   let abortController = null;
   let sessionsCache = [];
+  let settingsConfig = null;
+  let selectedProvider = null;
 
   // ---- DOM -----------------------------------------------------------------
   const $ = (id) => document.getElementById(id);
@@ -25,6 +27,11 @@
   const sidebar = $("sidebar");
   const scrim = $("scrim");
   const menuToggle = $("menu-toggle");
+  const settingsBtn = $("settings-btn");
+  const settingsModal = $("settings-modal");
+  const settingsClose = $("settings-close");
+  const settingsBody = $("settings-body");
+  const composerHint = $("composer-hint");
 
   // ---- helpers -------------------------------------------------------------
   const escapeHtml = (s) =>
@@ -687,6 +694,354 @@
   });
   scrim.addEventListener("click", closeSidebar);
 
+  // ---- model & provider settings ------------------------------------------
+  function el(tag, props, children) {
+    const node = document.createElement(tag);
+    props = props || {};
+    for (const [k, v] of Object.entries(props)) {
+      if (v == null || v === false) continue;
+      if (k === "class") node.className = v;
+      else if (k === "text") node.textContent = v;
+      else if (k === "html") node.innerHTML = v;
+      else if (k.startsWith("on") && typeof v === "function") {
+        node.addEventListener(k.slice(2).toLowerCase(), v);
+      } else {
+        node.setAttribute(k, v === true ? "" : v);
+      }
+    }
+    for (const c of [].concat(children || [])) {
+      if (c == null) continue;
+      node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    }
+    return node;
+  }
+
+  function fieldEl(label, input, hint) {
+    return el("div", { class: "field" }, [
+      el("label", { text: label }),
+      input,
+      hint ? el("div", { class: "hint", text: hint }) : null,
+    ]);
+  }
+
+  function applyConfigToUI(cfg) {
+    if (!cfg) return;
+    const live = cfg.live || {};
+    const provider = live.provider || cfg.provider;
+    const model = live.model || cfg.model || "";
+    const label = (cfg.providers && cfg.providers[provider] && cfg.providers[provider].label) || provider || "model";
+    if (modelBadge) {
+      modelBadge.textContent = model || label;
+      modelBadge.title = label + " · " + model + "  (click to change)";
+    }
+    if (headerModel) headerModel.textContent = model || label;
+    if (composerHint) {
+      composerHint.textContent =
+        provider === "ollama"
+          ? "ASTRA runs locally · powered by " + model
+          : "ASTRA · powered by " + label + " (" + model + ")";
+    }
+  }
+
+  function openSettings() {
+    settingsModal.hidden = false;
+    settingsBody.innerHTML = '<p class="modal-loading">Loading…</p>';
+    loadConfig()
+      .then(renderSettings)
+      .catch((e) => {
+        settingsBody.innerHTML = "";
+        settingsBody.appendChild(
+          el("p", { class: "settings-error", text: "Could not load settings: " + e.message })
+        );
+      });
+  }
+
+  function closeSettings() {
+    settingsModal.hidden = true;
+  }
+
+  async function loadConfig() {
+    settingsConfig = await api("/api/providers");
+    if (!selectedProvider) selectedProvider = settingsConfig.provider;
+    applyConfigToUI(settingsConfig);
+    return settingsConfig;
+  }
+
+  function renderSettings() {
+    const cfg = settingsConfig;
+    if (!cfg) return;
+    if (!selectedProvider) selectedProvider = cfg.provider;
+    settingsBody.innerHTML = "";
+
+    const live = cfg.live || {};
+    settingsBody.appendChild(
+      el("p", { class: "current-line" }, [
+        "Active: ",
+        el("b", { text: (cfg.providers[cfg.provider] || {}).label || cfg.provider }),
+        " · ",
+        el("b", { text: live.model || cfg.model }),
+      ])
+    );
+
+    const grid = el("div", { class: "provider-grid" });
+    for (const [name, info] of Object.entries(cfg.providers)) {
+      const isActive = name === cfg.provider;
+      let dotClass, meta;
+      if (name === "ollama") {
+        const running = !!(cfg.ollama && cfg.ollama.running);
+        dotClass = "pc-dot " + (running ? "ok" : "warn");
+        const count = (cfg.ollama && cfg.ollama.models ? cfg.ollama.models.length : 0);
+        meta = running ? count + " model" + (count === 1 ? "" : "s") + " installed" : "not running";
+      } else {
+        dotClass = "pc-dot " + (info.configured ? "ok" : "warn");
+        meta = info.configured ? "key set · " + info.model : "no API key yet";
+      }
+      grid.appendChild(
+        el(
+          "button",
+          {
+            class: "provider-card" + (name === selectedProvider ? " active" : ""),
+            type: "button",
+            onclick: () => {
+              selectedProvider = name;
+              renderSettings();
+            },
+          },
+          [
+            el("div", { class: "pc-name" }, [
+              el("span", { class: dotClass }),
+              info.label + (isActive ? " ✓" : ""),
+            ]),
+            el("div", { class: "pc-meta", text: meta }),
+          ]
+        )
+      );
+    }
+    settingsBody.appendChild(grid);
+
+    const section = el("div", { class: "settings-section" });
+    settingsBody.appendChild(section);
+    if (selectedProvider === "ollama") renderOllamaSection(section, cfg);
+    else renderCloudSection(section, cfg, selectedProvider);
+  }
+
+  function renderCloudSection(section, cfg, name) {
+    const info = cfg.providers[name] || {};
+    section.appendChild(el("h3", { text: info.label || name }));
+
+    const keyInput = el("input", {
+      type: "password",
+      autocomplete: "off",
+      placeholder: info.api_key_masked
+        ? "saved (" + info.api_key_masked + ") — type to replace"
+        : "paste your API key",
+    });
+    const modelInput = el("input", { type: "text", value: info.model || info.default_model || "" });
+    const baseInput = el("input", { type: "text", value: info.base_url || "" });
+
+    section.appendChild(
+      fieldEl(
+        "API key",
+        keyInput,
+        info.api_key_from_env
+          ? "Set by an environment variable (overrides this field)."
+          : "Stored locally in core/config/settings.json (file mode 600)."
+      )
+    );
+    section.appendChild(fieldEl("Model", modelInput, ""));
+    section.appendChild(
+      el("details", { class: "advanced" }, [
+        el("summary", { text: "Advanced (base URL)" }),
+        fieldEl("Base URL", baseInput, "For proxies or OpenAI-compatible endpoints."),
+      ])
+    );
+
+    const msg = el("p", { class: "settings-note" });
+    const saveBtn = el("button", {
+      class: "btn primary",
+      type: "button",
+      text: "Save & activate",
+      onclick: async () => {
+        saveBtn.disabled = true;
+        msg.className = "settings-note";
+        msg.textContent = "Saving…";
+        try {
+          const payload = { provider: name, model: modelInput.value.trim() || undefined };
+          if (keyInput.value.trim()) payload.api_key = keyInput.value.trim();
+          const baseVal = baseInput.value.trim();
+          if (baseVal && baseVal !== info.default_base_url) payload.base_url = baseVal;
+          const res = await api("/api/providers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          settingsConfig = res.config;
+          selectedProvider = name;
+          applyConfigToUI(settingsConfig);
+          renderSettings();
+        } catch (e) {
+          msg.className = "settings-error";
+          msg.textContent = e.message;
+          saveBtn.disabled = false;
+        }
+      },
+    });
+    section.appendChild(el("div", { class: "btn-row" }, [saveBtn]));
+    section.appendChild(msg);
+  }
+
+  function renderOllamaSection(section, cfg) {
+    const local = cfg.ollama || {};
+    const running = !!local.running;
+    section.appendChild(el("h3", { text: "Local models (Ollama)" }));
+    section.appendChild(
+      el("div", { class: "status-row" }, [
+        el("span", { class: "pc-dot " + (running ? "ok" : "warn") }),
+        running
+          ? "Ollama is running"
+          : local.installed
+          ? "Ollama is installed but not running"
+          : "Ollama is not installed on this machine",
+        local.version ? el("span", { text: " · " + local.version }) : null,
+      ])
+    );
+
+    const models = local.models || [];
+    const chips = el("div", { class: "chips" });
+    const activeModel = (cfg.live || {}).model;
+    for (const m of models) {
+      chips.appendChild(
+        el("button", {
+          class: "chip" + (m.name === activeModel ? " active" : ""),
+          type: "button",
+          text: m.name,
+          title: m.size_human || "",
+          onclick: () => activateModel("ollama", m.name),
+        })
+      );
+    }
+    section.appendChild(chips);
+
+    section.appendChild(
+      el("p", {
+        class: "settings-note",
+        text: "Download another model. On a fresh machine, tick “Install Ollama” to set everything up.",
+      })
+    );
+
+    const modelInput = el("input", { type: "text", placeholder: "e.g. qwen3:14b" });
+    const rec = local.recommended || [];
+    if (rec.length) {
+      modelInput.setAttribute("list", "rec-models");
+      const datalist = el("datalist", { id: "rec-models" });
+      for (const r of rec) datalist.appendChild(el("option", { value: r.name, label: r.name }));
+      section.appendChild(fieldEl("Model", modelInput, ""));
+      section.appendChild(datalist);
+      const recChips = el("div", { class: "chips" });
+      for (const r of rec) {
+        recChips.appendChild(
+          el("button", {
+            class: "chip",
+            type: "button",
+            text: r.name,
+            title: r.size + " — " + r.description,
+            onclick: () => {
+              modelInput.value = r.name;
+            },
+          })
+        );
+      }
+      section.appendChild(recChips);
+    } else {
+      section.appendChild(fieldEl("Model", modelInput, ""));
+    }
+
+    const install = el("input", { type: "checkbox", checked: true, id: "install-ollama" });
+    const installLabel = el("label", { class: "settings-note", style: "display:flex;gap:8px;align-items:center;cursor:pointer" }, [
+      install,
+      "Install Ollama if missing",
+    ]);
+    const log = el("div", { class: "setup-log" });
+    const runBtn = el("button", {
+      class: "btn",
+      type: "button",
+      text: "Install & download",
+      onclick: () => runLocalSetup(modelInput.value.trim(), install.checked, log, runBtn),
+    });
+    section.appendChild(el("div", { class: "btn-row" }, [installLabel, runBtn]));
+    section.appendChild(log);
+  }
+
+  async function activateModel(provider, model) {
+    try {
+      const res = await api("/api/providers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, model }),
+      });
+      settingsConfig = res.config;
+      applyConfigToUI(settingsConfig);
+      renderSettings();
+    } catch (e) {
+      alert("Could not switch model: " + e.message);
+    }
+  }
+
+  async function runLocalSetup(model, install, logEl, btn) {
+    logEl.textContent = "";
+    if (!model) {
+      logEl.textContent = "Enter or pick a model name first.\n";
+      return;
+    }
+    btn.disabled = true;
+    const append = (t) => {
+      logEl.textContent += String(t) + "\n";
+      logEl.scrollTop = logEl.scrollHeight;
+    };
+    try {
+      const res = await fetch("/api/providers/ollama/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, install }),
+      });
+      if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, idx).trim();
+          buffer = buffer.slice(idx + 1);
+          if (!line) continue;
+          let evt;
+          try {
+            evt = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (evt.type === "progress") append(evt.message);
+          else if (evt.type === "error") append("⚠ " + evt.message);
+          else if (evt.type === "result") append(evt.ok ? "Done." : "Setup did not complete.");
+        }
+      }
+    } catch (e) {
+      append("⚠ " + e.message);
+    } finally {
+      btn.disabled = false;
+      try {
+        selectedProvider = "ollama";
+        await loadConfig();
+        renderSettings();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   // ---- health / init -------------------------------------------------------
   async function checkHealth() {
     try {
@@ -695,16 +1050,31 @@
       statusText.textContent = "online";
       modelBadge.textContent = data.model;
       headerModel.textContent = data.model;
+      if (data.provider) modelBadge.title = data.provider + " · " + data.model + "  (click to change)";
     } catch (e) {
       statusDot.className = "dot err";
       statusText.textContent = "offline";
     }
   }
 
+  // ---- settings wiring -----------------------------------------------------
+  settingsBtn.addEventListener("click", openSettings);
+  settingsClose.addEventListener("click", closeSettings);
+  modelBadge.addEventListener("click", openSettings);
+  settingsModal.addEventListener("click", (e) => {
+    if (e.target === settingsModal) closeSettings();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !settingsModal.hidden) closeSettings();
+  });
+
   async function init() {
     await checkHealth();
     await refreshSessions();
     if (currentSessionId) await loadMessages(currentSessionId);
+    // Fetch provider config in the background so badges/hint show the real
+    // provider without requiring the settings panel to be opened.
+    loadConfig().catch(() => {});
     autoResize();
     inputEl.focus();
   }

@@ -44,6 +44,7 @@
           <span id="chat-title-text">New conversation</span>
         </div>
         <div class="header-actions">
+          <button class="icon-btn" id="settings-btn" aria-label="Model and provider settings" title="Model &amp; provider settings">⚙</button>
           <span class="badge" id="header-model">astra</span>
         </div>
       </header>
@@ -70,9 +71,21 @@
           </button>
           <button class="stop-btn" id="stop" hidden>Stop</button>
         </div>
-        <div class="composer-hint">ASTRA runs locally · powered by your Ollama model</div>
+        <div class="composer-hint" id="composer-hint">ASTRA runs locally · powered by your Ollama model</div>
       </div>
     </main>
+  </div>
+
+  <div class="modal-overlay" id="settings-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="modal-head">
+        <h2 id="settings-title">Model &amp; provider</h2>
+        <button class="modal-close" id="settings-close" aria-label="Close settings">×</button>
+      </div>
+      <div class="modal-body" id="settings-body">
+        <p class="modal-loading">Loading…</p>
+      </div>
+    </div>
   </div>
 
   <script src="/static/app.js"></script>

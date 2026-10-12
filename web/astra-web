@@ -50,13 +50,33 @@ if ! "${PYTHON_BIN}" -c "import fastapi, uvicorn" >/dev/null 2>&1; then
   "${PYTHON_BIN}" -m pip install --quiet -r "${REQ_WEB}"
 fi
 
-# --- Sanity check Ollama (non-fatal) ----------------------------------------
-OLLAMA_HOST="${OLLAMA_HOST:-http://localhost:11434}"
-if command -v curl >/dev/null 2>&1; then
-  if ! curl -s --max-time 3 "${OLLAMA_HOST}/api/tags" >/dev/null 2>&1; then
-    warn "Ollama does not appear to be running at ${OLLAMA_HOST}."
-    warn "Start it with 'ollama serve' — the UI will load but replies will fail."
+# --- Sanity check the active provider (non-fatal) ---------------------------
+# ASTRA can run against local Ollama or a cloud provider (OpenAI, Anthropic,
+# Gemini). Only nag about Ollama when it is actually the selected provider.
+ACTIVE_PROVIDER="$(
+  CORE_DIR="${CORE_DIR}" "${PYTHON_BIN}" - <<'PY' 2>/dev/null || true
+import os, sys
+sys.path.insert(0, os.environ["CORE_DIR"])
+try:
+    from ai import settings
+    print(settings.get_settings().active_provider())
+except Exception:
+    print("ollama")
+PY
+)"
+ACTIVE_PROVIDER="${ACTIVE_PROVIDER:-ollama}"
+
+if [[ "${ACTIVE_PROVIDER}" == "ollama" ]]; then
+  OLLAMA_HOST="${OLLAMA_HOST:-http://localhost:11434}"
+  if command -v curl >/dev/null 2>&1; then
+    if ! curl -s --max-time 3 "${OLLAMA_HOST}/api/tags" >/dev/null 2>&1; then
+      warn "Ollama does not appear to be running at ${OLLAMA_HOST}."
+      warn "Start it with 'ollama serve', or use the in-app Settings (⚙) to choose"
+      warn "another provider or run the local setup that installs Ollama for you."
+    fi
   fi
+else
+  log "Provider: ${ACTIVE_PROVIDER} (configure it from Settings ⚙ in the app)."
 fi
 
 ok "Starting ASTRA Web…"

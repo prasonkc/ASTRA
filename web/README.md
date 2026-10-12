@@ -30,23 +30,46 @@ web/
 ```
 
 The launcher reuses `core/.venv`, installs the core + web dependencies if
-missing, checks that Ollama is reachable, and starts the server on
-`http://127.0.0.1:8765` by default.
+missing, checks that the *active* provider is reachable (Ollama by default), and
+starts the server on `http://127.0.0.1:8765`.
 
 ## Configuration
 
-| Env var       | Default     | Purpose                          |
-|---------------|-------------|----------------------------------|
-| `ASTRA_MODEL` | `qwen3:14b` | Ollama model used by the agent   |
-| `ASTRA_VENV`  | `core/.venv`| Python venv used by the launcher |
-| `ASTRA_PYTHON`| (venv python)| Explicit python binary override  |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint check |
+ASTRA is model **and** provider agnostic. You can use a local model through
+[Ollama](https://ollama.com) or a cloud provider (OpenAI, Anthropic, Google
+Gemini) using your own API key. Configuration can be set three ways, in order of
+precedence:
+
+1. **Environment variables** (always win),
+2. the saved config file `core/config/settings.json` (written by `/provider` or
+   the in-app **Settings** panel; git-ignored, file mode `600`),
+3. built-in defaults.
+
+| Env var                       | Default                    | Purpose                                   |
+|-------------------------------|----------------------------|-------------------------------------------|
+| `ASTRA_PROVIDER`              | `ollama`                   | `ollama`, `openai`, `anthropic`, `gemini` |
+| `ASTRA_MODEL`                 | per provider (see below)   | Model name for the active provider        |
+| `ASTRA_OPENAI_API_KEY` / `OPENAI_API_KEY` | — | OpenAI API key                |
+| `ASTRA_ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` | — | Anthropic (Claude) API key |
+| `ASTRA_GEMINI_API_KEY` / `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Google (Gemini) API key |
+| `ASTRA_OLLAMA_HOST` / `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint         |
+| `ASTRA_*_BASE_URL`            | provider default           | Override an endpoint (proxies, gateways)  |
+| `ASTRA_SETTINGS_PATH`         | `core/config/settings.json`| Where settings are stored                 |
+| `ASTRA_DB_PATH`               | `core/memory/chat_history.db` | Conversation database                  |
+| `ASTRA_VENV`                  | `core/.venv`               | Python venv used by the launcher          |
+| `ASTRA_PYTHON`                | (venv python)              | Explicit python binary override           |
+
+Default model per provider: `qwen3:14b` (ollama), `gpt-4o-mini` (openai),
+`claude-3-5-sonnet-latest` (anthropic), `gemini-2.0-flash` (gemini).
 
 ## How it wraps the core
 
-The wrapper imports the core's own modules (`ai.ollama`, `memory.chat_history`)
+The wrapper imports the core's own modules (`ai.model`, `memory.chat_history`)
 and runs them with the working directory set to `core/`, matching the terminal
 app exactly (DB paths, identity, downloads). There is no duplicated agent logic.
+Provider/model selection is shared with the terminal app through `ai.settings`,
+so a change made in the web **Settings** panel also applies when you run the
+terminal app — and vice versa.
 
 Because the core is single-threaded and some of its components are
 thread-affine (SQLite connections, the Playwright event loop), the service runs
@@ -55,14 +78,20 @@ to the browser via a per-request in-process queue:
 
 ```
 Browser ──POST /api/chat──▶ FastAPI ──▶ queue ──▶ core worker thread
-        ◀──NDJSON stream─── (thinking/content/tool events) ◀── OllamaModel
+        ◀──NDJSON stream─── (thinking/content/tool events) ◀── AgentModel
+                                                                 │
+                                                       ┌─────────┴─────────┐
+                                                       │  Provider         │
+                                                       │  ollama / openai  │
+                                                       │  anthropic / gemini│
+                                                       └───────────────────┘
 ```
 
 Supported API:
 
 | Method   | Path                               | Purpose                          |
 |----------|------------------------------------|----------------------------------|
-| GET      | `/api/health`                      | Server + model status            |
+| GET      | `/api/health`                      | Server + provider/model status   |
 | GET      | `/api/sessions`                    | List conversations (+ current)   |
 | POST     | `/api/sessions`                    | Create a new conversation        |
 | POST     | `/api/sessions/switch`             | Switch to a conversation         |
@@ -70,6 +99,25 @@ Supported API:
 | GET      | `/api/sessions/{id}/messages`      | Full message history             |
 | POST     | `/api/chat`                        | Stream a chat turn (NDJSON)      |
 | GET      | `/api/files?path=…`                | Serve a generated file           |
+| GET      | `/api/providers`                   | Provider config (keys masked)    |
+| POST     | `/api/providers`                   | Activate provider/model + save key |
+| GET      | `/api/providers/ollama/status`     | Ollama install/run + model list  |
+| POST     | `/api/providers/ollama/setup`      | Install Ollama + pull a model (NDJSON) |
+
+## Choosing a model / provider
+
+The web app has a **Settings** panel (the ⚙ button in the header, or click the
+model badge). It lets you:
+
+* **Local (Ollama)** — pick a model already installed on this machine.
+* **local_setup** — install Ollama (Linux/macOS/Windows, best-effort) and
+  download a model, streaming progress into the panel. Useful on a new machine.
+* **OpenAI / Anthropic (Claude) / Google (Gemini)** — paste an API key and pick
+  a model. Keys are stored in `core/config/settings.json` (mode `600`) and never
+  sent back to the browser (only a masked form is ever returned).
+
+The same actions are available in the terminal app via the `/provider` command
+(run `/provider help`). Because both use `ai.settings`, the choice is shared.
 
 ### Chat stream events
 

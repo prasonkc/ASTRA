@@ -18,6 +18,9 @@ ENV/
 *.sqlite
 *.sqlite3
 
+# Provider/model configuration (may contain API keys)
+core/config/settings.json
+
 # Downloads and generated documents
 downloads/
 

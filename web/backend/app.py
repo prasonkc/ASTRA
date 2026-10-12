@@ -44,6 +44,18 @@ class SwitchRequest(BaseModel):
     session_id: str
 
 
+class ProviderRequest(BaseModel):
+    provider: str
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+
+
+class LocalSetupRequest(BaseModel):
+    model: str
+    install: bool = True
+
+
 @app.get("/api/files")
 def serve_generated_file(path: str):
     """Serve a file ASTRA generated inside the core directory.
@@ -79,8 +91,54 @@ def health():
     return {
         "status": "ok",
         "model": service.model_name,
+        "provider": service.provider_name,
         "session_id": service.current_session(),
     }
+
+
+# --- provider configuration --------------------------------------------------
+@app.get("/api/providers")
+def get_providers():
+    """Current provider/model plus everything the settings panel needs."""
+    return get_service().get_config()
+
+
+@app.post("/api/providers")
+def set_provider(payload: ProviderRequest):
+    """Activate a provider/model and optionally store an API key / base URL."""
+    snapshot = get_service().set_provider(
+        payload.provider,
+        model=payload.model,
+        api_key=payload.api_key,
+        base_url=payload.base_url,
+    )
+    return {"ok": True, "live": snapshot, "config": get_service().get_config()}
+
+
+@app.get("/api/providers/ollama/status")
+def ollama_status():
+    """Whether Ollama is installed/running and which models are available."""
+    return get_service().local_status()
+
+
+@app.post("/api/providers/ollama/setup")
+def ollama_setup(payload: LocalSetupRequest):
+    """Install Ollama (optional) and pull a model, streaming progress as NDJSON."""
+    service = get_service()
+
+    def event_stream():
+        for event in service.stream_local_setup(payload.model, install=payload.install):
+            yield json.dumps(event) + "\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @app.get("/api/sessions")

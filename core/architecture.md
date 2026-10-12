@@ -67,21 +67,29 @@ CREATE INDEX idx_messages_conversation_id ON messages(conversation_id);
 
 ---
 
-### 2. OllamaModel Session Management (`ai/ollama.py`)
+### 2. AgentModel Session Management (`ai/model.py`)
 
-**Purpose:** High-level session management integrated with LLM conversation history.
+> Historical note: this class used to live in `ai/ollama.py` as `OllamaModel`.
+> `ai/ollama.py` is now a thin backwards-compatibility shim that re-exports
+> `AgentModel` as `OllamaModel`; new code should import from `ai.model`.
+
+**Purpose:** High-level session management integrated with LLM conversation
+history. `AgentModel` owns the agent loop (tool calling, streaming, persistence)
+and delegates the actual model call to a swappable provider — local Ollama or a
+cloud provider (OpenAI, Anthropic, Gemini). See §6.
 
 **Session Lifecycle:**
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      OllamaModel                            │
+│                      AgentModel                             │
 ├─────────────────────────────────────────────────────────────┤
+│  - provider_name: str           ← 'ollama'|'openai'|…       │
 │  - model_name: str                                          │
-│  - memory_tool: MemoryTool                                  │
+│  - provider: Provider           ← backend for this provider │
 │  - chat_history: ChatHistory                                │
 │  - session_id: str                                          │
-│  - history: List[Dict]           ← In-memory conversation  │
+│  - history: List[Dict]          ← In-memory (OpenAI shape)  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -98,8 +106,9 @@ CREATE INDEX idx_messages_conversation_id ON messages(conversation_id);
 | `delete_session(session_id)` | Delegates to ChatHistory |
 | `delete_session_by_index(index)` | Delegates to ChatHistory |
 | `clear_all_sessions()` | Delegates to ChatHistory |
-| `generate(prompt)` | Main generation loop with tool calling |
-| `add_response(content)` | Appends to history + persists |
+| `generate(prompt, on_event=None)` | Main generation loop with tool calling |
+| `describe()` | Returns `{provider, provider_label, model, session_id}` |
+| `reconfigure(provider, model)` | Switch provider/model without touching history |
 | `close()` | Closes ChatHistory connection |
 
 **History Synchronization:**
@@ -256,6 +265,69 @@ def warning(text): return f"{Colors.YELLOW}{text}{Colors.RESET}"
 # ... etc
 ```
 
+### 6. Provider & Model Configuration (`ai/settings.py`, `ai/providers/`)
+
+**Purpose:** Make ASTRA model- and provider-agnostic. The agent loop only ever
+talks to a normalized `Provider`, so adding a backend never touches the loop.
+
+**Layout:**
+
+```
+ai/
+├── settings.py         # provider/model/API-key config + env precedence
+├── model.py            # AgentModel — the agent loop (backend-agnostic)
+├── local_setup.py      # install Ollama + list/download models (best effort)
+├── ollama.py           # backwards-compat shim (OllamaModel = AgentModel)
+└── providers/
+    ├── base.py         # Provider, Chunk, ToolCall, ProviderError, SSE helper
+    ├── ollama_provider.py
+    ├── openai_provider.py
+    ├── anthropic_provider.py
+    ├── gemini_provider.py
+    └── __init__.py     # get_provider(name) factory
+```
+
+**How a call flows:**
+
+```
+AgentModel.generate()
+   └─ provider.stream_chat(model, messages, tools, think)
+          └─ yields normalized Chunk(message=ResponseMessage(
+                 content, thinking, tool_calls[ToolCall]))     ◀── same shape
+                                                                   for every backend
+```
+
+Each provider translates the internal OpenAI-flavored `self.history` into its own
+wire format at call time (tool calls and results are paired by order; tool-call
+ids are preserved across reloads, synthesizing one when a backend doesn't supply
+it). This keeps history storage portable while letting each API use its native
+protocol.
+
+**Configuration precedence** (highest first):
+
+1. `ASTRA_PROVIDER` / `ASTRA_MODEL` and per-provider `*_API_KEY` / `*_BASE_URL`
+   environment variables,
+2. `core/config/settings.json` (written by `/provider` / the web Settings panel;
+   git-ignored, mode `600`),
+3. built-in defaults (`ollama`, `qwen3:14b`).
+
+`Settings.to_public()` returns a snapshot with API keys **masked**, which is what
+the web UI and `/provider status` display — the raw key never leaves the process.
+
+**Commands:**
+
+```
+/provider                 Interactive provider setup menu
+/provider status          Show current provider/model (+ key source)
+/provider local           Pick an installed Ollama model
+/provider local_setup     Install Ollama (if needed) and download a model
+/provider openai          Add an OpenAI key (also: /provider gpt)
+/provider anthropic       Add an Anthropic (Claude) key
+/provider gemini          Add a Google (Gemini) key
+/provider set <p> [model] Set the active provider (and model) directly
+/model [name]             Show or switch the model for the current provider
+```
+
 ---
 
 ## Data Flow Diagram
@@ -267,7 +339,7 @@ def warning(text): return f"{Colors.YELLOW}{text}{Colors.RESET}"
 └─────────────┘     └────────┬─────────┘     └────────┬────────┘
                              │                        │
                     ┌────────▼────────┐     ┌─────────▼────────┐
-                    │  Session Cmd?   │────▶│  OllamaModel     │
+                    │  Session Cmd?   │────▶│  AgentModel      │
                     │  (starts with   │     │  Session Methods │
                     │   /s or /session)     │                  │
                     └────────┬────────┘     └────────┬─────────┘
@@ -278,8 +350,10 @@ def warning(text): return f"{Colors.YELLOW}{text}{Colors.RESET}"
                     └────────┬────────┘     └────────┬─────────┘
                              │                       │
                     ┌────────▼────────┐              │
-                    │  Ollama API     │              │
+                    │  Provider       │              │
                     │  (streaming)    │              │
+                    │  ollama · openai│              │
+                    │  claude · gemini│              │
                     └─────────────────┘              │
                                                      │
                     ┌────────────────────────────────┘
@@ -328,8 +402,12 @@ def warning(text): return f"{Colors.YELLOW}{text}{Colors.RESET}"
 ## Configuration
 
 **Database Paths:**
-- Chat history: `./memory/chat_history.db`
+- Chat history: `./memory/chat_history.db` (override with `ASTRA_DB_PATH`)
 - Long-term memory: `./memory/astra.db`
+
+**Provider / Model:**
+- Settings file: `./config/settings.json` (override with `ASTRA_SETTINGS_PATH`)
+- See §6 for environment variables and precedence.
 
 **Default Limits:**
 - Session list: 20 sessions
@@ -345,9 +423,9 @@ Run tests manually:
 ```bash
 # Test session controller
 python -c "
-from ai.ollama import OllamaModel
+from ai.model import AgentModel
 from agent.session_controller import SessionController
-model = OllamaModel('qwen3:8b')
+model = AgentModel()
 ctrl = SessionController(model)
 ctrl.handle('/s list')
 ctrl.handle('/s new')
@@ -360,19 +438,31 @@ model.close()
 
 # Test persistence
 python -c "
-from ai.ollama import OllamaModel
-m1 = OllamaModel('qwen3:8b')
+from ai.model import AgentModel
+m1 = AgentModel()
 sid = m1.session_id
 m1.chat_history.add_message(sid, 'user', 'test')
 m1.chat_history.add_message(sid, 'assistant', 'response')
 m1.close()
 
 # Simulate restart
-m2 = OllamaModel('qwen3:8b', session_id=sid)
+m2 = AgentModel(session_id=sid)
 print(len(m2.history))  # Should be 3 (system + user + assistant)
 m2.close()
 "
+
+# Test provider switching (no API calls made by reconfigure)
+python -c "
+from ai.model import AgentModel
+m = AgentModel()
+print(m.describe())
+m.reconfigure('openai', 'gpt-4o-mini')
+print(m.describe())
+m.close()
+"
 ```
+
+`OllamaModel` remains importable from `ai.ollama` for any older scripts.
 
 ---
 

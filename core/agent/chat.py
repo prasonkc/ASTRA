@@ -1,7 +1,8 @@
 import sys
 import time
 import traceback
-from ai.ollama import OllamaModel
+from ai.model import AgentModel
+from controller.provider_controller import ProviderController
 from controller.session_controller import SessionController
 from utils.colors import (
     Colors, error, success, warning, info, title, dim, user_msg, important, secondary, bold
@@ -11,8 +12,11 @@ from utils.colors import (
 class Chat:
     def __init__(self):
         try:
-            self.model = OllamaModel("qwen3:14b")
+            # Provider and model are resolved from settings/environment, so
+            # nothing about the model is hard-coded here.
+            self.model = AgentModel()
             self.session_controller = SessionController(self.model)
+            self.provider_controller = ProviderController(self.model)
         except Exception as e:
             print(error(f"Failed to initialize chat: {e}"))
             traceback.print_exc()
@@ -20,7 +24,13 @@ class Chat:
 
     def start(self):
         print(title("Welcome to ASTRA. Type 'exit' to quit."))
+        try:
+            snap = self.model.describe()
+            print(info(f"Model: {snap['provider_label']} · {snap['model']}"))
+        except Exception:
+            pass
         print(dim("Session commands: /s new | /s list | /s <num> | /s resume | /s del <num> | /s clear"))
+        print(dim("Provider: /provider (local_setup · openai · anthropic · gemini) | /model <name>"))
         self._safe_show_current_session()
 
         while True:
@@ -40,6 +50,11 @@ class Chat:
                     break
 
                 if user_input.strip() == "":
+                    continue
+
+                # Handle provider/model setup commands
+                if user_input.startswith("/provider") or user_input.startswith("/model"):
+                    self.provider_controller.handle(user_input)
                     continue
 
                 # Handle session commands

@@ -1,5 +1,6 @@
 import sqlite3
 import json
+import os
 import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -7,7 +8,12 @@ from utils.colors import error, warning
 
 
 class ChatHistory:
-    def __init__(self, db_path: str = "./memory/chat_history.db"):
+    def __init__(self, db_path: str = None):
+        # Allow the database location to be overridden (useful for tests and for
+        # running more than one ASTRA instance side by side). Defaults to the
+        # core-relative path used by the terminal app.
+        if not db_path:
+            db_path = os.environ.get("ASTRA_DB_PATH") or "./memory/chat_history.db"
         self.db_path = db_path
         try:
             self.conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30.0)

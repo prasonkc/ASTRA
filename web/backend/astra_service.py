@@ -44,22 +44,27 @@ if str(CORE_DIR) not in sys.path:
 # The core uses CWD-relative paths; run it exactly like the terminal app does.
 os.chdir(CORE_DIR)
 
-from ai.ollama import OllamaModel  # noqa: E402
+from ai import local_setup  # noqa: E402
+from ai import settings as settings_module  # noqa: E402
+from ai.model import AgentModel  # noqa: E402
 from memory.chat_history import ChatHistory  # noqa: E402
 
 
-DEFAULT_MODEL = os.environ.get("ASTRA_MODEL", "qwen3:14b")
 MAX_RESULT_CHARS = 20_000
 
 
-def _build_model(model_name: str) -> "OllamaModel":
-    """Construct the core model on the caller thread (the core worker)."""
+def _build_model(model_name: Optional[str] = None, provider: Optional[str] = None) -> "AgentModel":
+    """Construct the core model on the caller thread (the core worker).
+
+    ``model_name``/``provider`` override the configured defaults; when omitted
+    they are resolved from :mod:`ai.settings` (environment + settings file).
+    """
     # Resume the most recent conversation instead of spawning a fresh empty
     # session on every server start.
     latest = _latest_session_id()
     if latest:
-        return OllamaModel(model_name, session_id=latest)
-    return OllamaModel(model_name)
+        return AgentModel(model_name, session_id=latest, provider=provider)
+    return AgentModel(model_name, provider=provider)
 
 
 def _latest_session_id() -> Optional[str]:
@@ -91,13 +96,14 @@ class AstraService:
     cannot interleave with a session mutation.
     """
 
-    def __init__(self, model_name: Optional[str] = None):
-        self.model_name = model_name or DEFAULT_MODEL
+    def __init__(self, model_name: Optional[str] = None, provider: Optional[str] = None):
         self._lock = threading.RLock()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="astra-core")
         # Construct the model on the worker thread so every tool/DB connection
         # is created and used by that same thread, mirroring the terminal.
-        self.model = self._executor.submit(_build_model, self.model_name).result()
+        self.model = self._executor.submit(_build_model, model_name, provider).result()
+        self.model_name = self.model.model_name
+        self.provider_name = self.model.provider_name
 
     # ---- helpers ------------------------------------------------------------
     def _call(self, operation, *args):
@@ -161,6 +167,21 @@ class AstraService:
         except Exception:
             pass
 
+    def _op_set_provider(self, provider, model, api_key, base_url) -> Dict:
+        """Persist the selected provider/model (and key/url) and swap the backend."""
+        settings = settings_module.get_settings()
+        provider = settings_module.normalize_provider(provider)
+        if api_key is not None:
+            settings.set_api_key(provider, api_key)
+        if base_url is not None:
+            settings.set_base_url(provider, base_url)
+        settings.set_active(provider, model)
+        resolved = settings.active_model(provider)
+        snapshot = self.model.reconfigure(provider, resolved)
+        self.model_name = snapshot["model"]
+        self.provider_name = snapshot["provider"]
+        return snapshot
+
     # ---- public, decision-free proxy methods ---------------------------------
     def current_session(self) -> str:
         return self._call(self._op_current_session)
@@ -185,6 +206,85 @@ class AstraService:
             self._call(self._op_close)
         finally:
             self._executor.shutdown(wait=True)
+
+    # ---- provider / model configuration -------------------------------------
+    def get_config(self) -> Dict:
+        """Snapshot of the provider configuration (API keys masked).
+
+        Deliberately avoids the core worker so the settings panel stays
+        responsive even while a long reply is streaming.
+        """
+        settings = settings_module.get_settings()
+        public = settings.to_public()
+        try:
+            public["live"] = self.model.describe()
+        except Exception:
+            public["live"] = {"provider": self.provider_name, "model": self.model_name}
+        try:
+            public["ollama"] = local_setup.local_status(settings.base_url("ollama"))
+        except Exception as exc:
+            public["ollama"] = {
+                "installed": False,
+                "running": False,
+                "models": [],
+                "recommended": local_setup.RECOMMENDED_MODELS,
+                "error": str(exc),
+            }
+        return public
+
+    def set_provider(
+        self,
+        provider: str,
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ) -> Dict:
+        """Persist and activate a provider/model. Runs on the core worker."""
+        return self._call(self._op_set_provider, provider, model, api_key, base_url)
+
+    def local_status(self) -> Dict:
+        settings = settings_module.get_settings()
+        return local_setup.local_status(settings.base_url("ollama"))
+
+    def list_local_models(self) -> List[Dict]:
+        settings = settings_module.get_settings()
+        return local_setup.list_local_models(settings.base_url("ollama"))
+
+    def stream_local_setup(self, model: str, install: bool = True):
+        """Yield events while installing Ollama (optional) and pulling a model.
+
+        This runs off the core worker thread (it only talks to the Ollama HTTP
+        API), so it can stream download progress without blocking chat — except
+        for the final activation, which is marshalled onto the worker.
+        """
+        events: "queue.Queue" = queue.Queue()
+
+        def progress(text: str) -> None:
+            events.put({"type": "progress", "message": str(text)})
+
+        def run() -> None:
+            try:
+                settings = settings_module.get_settings()
+                host = settings.base_url("ollama")
+                if install:
+                    ok = local_setup.install_and_pull(model, progress, host)
+                else:
+                    ok = local_setup.start_ollama_server(progress, host) and \
+                        local_setup.pull_model(model, progress, host)
+                events.put({"type": "result", "ok": bool(ok), "model": model})
+                if ok:
+                    events.put({"type": "config", "config": self.set_provider("ollama", model)})
+            except Exception as exc:
+                events.put({"type": "error", "message": str(exc)})
+            finally:
+                events.put(None)
+
+        threading.Thread(target=run, name="astra-local-setup", daemon=True).start()
+        while True:
+            item = events.get()
+            if item is None:
+                break
+            yield item
 
     # ---- chat ---------------------------------------------------------------
     def stream_chat(self, prompt: str, session_id: Optional[str] = None):

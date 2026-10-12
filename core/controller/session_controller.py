@@ -2,14 +2,14 @@
 Session command handler module.
 Handles all session-related commands for the chat interface.
 """
-from ai.ollama import OllamaModel
+from ai.model import AgentModel
 from utils.colors import (
     Colors, error, success, warning, info, title, dim, user_msg, important, secondary, bold
 )
 
 
 class SessionController:
-    def __init__(self, model: OllamaModel):
+    def __init__(self, model: AgentModel):
         self.model = model
 
     def handle(self, user_input: str) -> bool:
