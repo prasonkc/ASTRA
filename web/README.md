@@ -13,7 +13,7 @@ web/
 │   ├── run.py         # entrypoint (arg parsing, browser open, uvicorn)
 │   ├── app.py         # HTTP routes + static frontend serving
 │   └── astra_service.py
-└── frontend/          # vanilla HTML/CSS/JS, dark theme, blue palette
+└── frontend/          # vanilla HTML/CSS/JS, black + yellow theme
     ├── index.html
     ├── styles.css
     ├── app.js
@@ -69,6 +69,7 @@ Supported API:
 | DELETE   | `/api/sessions/{id}`               | Delete a conversation            |
 | GET      | `/api/sessions/{id}/messages`      | Full message history             |
 | POST     | `/api/chat`                        | Stream a chat turn (NDJSON)      |
+| GET      | `/api/files?path=…`                | Serve a generated file           |
 
 ### Chat stream events
 
@@ -87,3 +88,17 @@ Each line is a JSON object with a `type`:
 Yes — the Stop button aborts the client request; the backend notices the
 disconnect, sets a stop flag the core worker observes between tokens, and
 releases the model so the next message isn't delayed.
+
+### Opening generated files
+
+When ASTRA creates a file (Word/PowerPoint/Excel document, PDF, screenshot,
+downloaded page, …) it lives under `core/` (downloads go to `core/downloads/`).
+Instead of only printing the on-disk location, the web UI turns any file path it
+sees in the reply — or in a tool call/result — into a clickable **download
+pill**. Clicking one streams the file from `GET /api/files?path=…`, which:
+
+* accepts an absolute path or a path relative to `core/`,
+* serves it inline with the right content type (PDFs/images preview, office
+  files download), and
+* **refuses anything outside the core directory** (traversal attempts and host
+  paths such as `/etc/passwd` return `404`).

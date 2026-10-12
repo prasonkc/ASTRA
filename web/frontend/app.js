@@ -81,6 +81,65 @@
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
+  // ---- file links ----------------------------------------------------------
+  // Turn paths to generated files (docx/pptx/xlsx/pdf/...) into clickable
+  // download pills that hit /api/files. Matches absolute, relative, ./  and
+  // bare-filename paths without grabbing surrounding words or punctuation.
+  const FILE_EXTS =
+    "docx|doc|pptx|ppt|xlsx|xls|pdf|txt|csv|json|md|png|jpe?g|gif|webp|svg|zip|mp3|mp4|wav|html?|rtf";
+  // Absolute path starting with a drive letter, /, ./ or ../, then any
+  // number of segments:   /mnt/.../file.docx   C:\dir\file.docx   ./x/file.docx
+  const PATH_ABS =
+    "(?<![\\w.:/])(?:[A-Za-z]:[\\\\/]|\\.{1,2}[\\\\/]|[\\\\/])" +
+    "(?:[\\w.@+()' -]+[\\\\/])*" +
+    "[\\w][\\w.@+()' -]*\\.(?:" + FILE_EXTS + ")\\b";
+  // Relative path with real directory separators. The lookahead stops a token
+  // from starting on a quote (e.g. tool JSON 'path': 'file.pdf').
+  const PATH_REL =
+    "(?<![\\w.:/])(?!['\"])[\\w-]+[\\\\/]" +
+    "(?:[\\w.@+()' -]+[\\\\/])*" +
+    "[\\w][\\w.@+()' -]*\\.(?:" + FILE_EXTS + ")\\b";
+  // Bare filename, single word, not glued to preceding path/word chars.
+  const PATH_BARE = "(?<![\\w./])(?!['\"])[\\w][\\w.@+()-]*\\.(?:" + FILE_EXTS + ")\\b";
+  const FILE_PATH_RE = new RegExp("(?:" + PATH_ABS + "|" + PATH_REL + "|" + PATH_BARE + ")", "gi");
+
+  function linkifyTextNode(node) {
+    const text = node.nodeValue || "";
+    const re = new RegExp(FILE_PATH_RE.source, FILE_PATH_RE.flags);
+    // exec() below must start from the beginning; calling test() first would
+    // advance lastIndex and skip the first match.
+    re.lastIndex = 0;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    let found = false;
+    let m;
+    while ((m = re.exec(text))) {
+      found = true;
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const full = m[0];
+      const a = document.createElement("a");
+      a.className = "file-link";
+      a.href = "/api/files?path=" + encodeURIComponent(full);
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.title = "Open or download " + full;
+      a.textContent = full;
+      frag.appendChild(a);
+      last = m.index + full.length;
+    }
+    if (!found) return;
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  }
+
+  function linkifyFilePaths(root) {
+    if (!root) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    nodes.forEach(linkifyTextNode);
+  }
+
   // ---- markdown ------------------------------------------------------------
   function renderMarkdown(md) {
     if (!md) return "";
@@ -295,6 +354,7 @@
       turn.raf = requestAnimationFrame(() => {
         turn.raf = null;
         node.innerHTML = renderMarkdown(node._md || "");
+        linkifyFilePaths(node);
         scrollToBottom();
       });
     }
@@ -317,6 +377,7 @@
       '<div class="tool-args">' + escapeHtml(formatArgs(call.arguments)) + "</div>" +
       "<pre></pre></details>";
     turn.parts.appendChild(card);
+    linkifyFilePaths(card.querySelector(".tool-args"));
     return card;
   }
 
@@ -332,7 +393,10 @@
     }
     const details = card.querySelector(".tool-body");
     const pre = card.querySelector("pre");
-    if (pre) pre.textContent = result.result == null ? "" : String(result.result);
+    if (pre) {
+      pre.textContent = result.result == null ? "" : String(result.result);
+      linkifyFilePaths(pre);
+    }
     if (details) {
       details.hidden = false;
       if (result.autoOpen) details.open = true;
@@ -356,7 +420,10 @@
       // first (e.g. while rendering persisted history) render now. The md
       // block may have been stashed on currentText or already live in parts.
       const md = turn.currentText || turn.parts.querySelector(".md:last-child");
-      if (md) md.innerHTML = renderMarkdown(md._md || "");
+      if (md) {
+        md.innerHTML = renderMarkdown(md._md || "");
+        linkifyFilePaths(md);
+      }
     }
     if (turn.thinking) turn.thinking.open = false;
     if (turn.cursor) turn.cursor.remove();

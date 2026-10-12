@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
@@ -16,7 +17,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .astra_service import FRONTEND_DIR, get_service
+from .astra_service import CORE_DIR, FRONTEND_DIR, get_service
 
 
 @asynccontextmanager
@@ -41,6 +42,35 @@ class NewSessionRequest(BaseModel):
 
 class SwitchRequest(BaseModel):
     session_id: str
+
+
+@app.get("/api/files")
+def serve_generated_file(path: str):
+    """Serve a file ASTRA generated inside the core directory.
+
+    The core tools resolve relative output paths against the core working
+    directory (and web downloads into ``./downloads``), so every generated
+    document lives under CORE_DIR. This endpoint turns those on-disk paths
+    into openable/downloadable links for the web UI.
+    """
+    try:
+        candidate = Path(path).expanduser()
+        if not candidate.is_absolute():
+            candidate = CORE_DIR / candidate
+        resolved = candidate.resolve()
+    except Exception:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Keep serving restricted to files inside the core directory; never
+    # expose arbitrary host paths.
+    if CORE_DIR.resolve() not in resolved.parents or not resolved.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(
+        resolved,
+        filename=resolved.name,
+        content_disposition_type="inline",
+    )
 
 
 @app.get("/api/health")
