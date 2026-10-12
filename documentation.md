@@ -88,7 +88,7 @@ cd core
 
 There is no provider configured on a fresh install, so the first thing you may
 want to do is run `/provider` (see below) — or start the web app and use the
-**Settings** popup.
+**Settings** sidebar.
 
 ---
 
@@ -133,19 +133,24 @@ API keys are read with a hidden prompt (nothing is echoed) and stored in
 
 ### From the web app
 
-Click **⚙ Settings** in the header (or the model badge). A popup opens with a
-short guided flow:
+Click **⚙ Settings** in the header (or the model badge). A settings sidebar slides
+in from the right; close it with its **×**, by clicking outside it, or with
+`Esc` (the Settings button toggles it back open).
 
-1. **Where should ASTRA run?** — four cards, each showing its live status
-   (`Running · 3 models`, `API key saved`, `Needs an API key`, …). The active one
-   is highlighted and shown in a banner at the top.
-2. Click a card to configure it:
+The sidebar shows everything in one scroll:
+
+1. **Currently active** — a banner with the active provider and model.
+2. **Where should ASTRA run?** — the four providers as a list, each with its
+   live status (`Running · 3 models`, `API key saved`, `Needs an API key`, …).
+   The active one is highlighted; tap any provider to show its settings below.
+3. **The selected provider's settings:**
    - **Local (Ollama):** tap any already-installed model to use it instantly, or
      download a new one.
    - **Cloud:** paste your API key and confirm or change the model, then press
      **Connect & activate**.
-3. A toast confirms the switch (e.g. *"Now using OpenAI · gpt-4o-mini"*) and the
-   header badge updates.
+
+A toast confirms the switch (e.g. *"Now using OpenAI · gpt-4o-mini"*) and the
+header badge updates.
 
 Keys are **never** sent back to the browser — the API only ever returns a masked
 form such as `sk-a…f3d9`.
@@ -156,7 +161,7 @@ form such as `sk-a…f3d9`.
 
 `local_setup` is the zero-to-working path for running models on your own
 machine. It is available as `/provider local_setup` in the terminal and as the
-**Download a model** section in the web **Settings** popup. It:
+**Download a model** section in the web **Settings** sidebar. It:
 
 1. **Detects** Ollama (checks `PATH` and common install locations),
 2. **installs** it if missing — best effort, per OS:
@@ -230,7 +235,7 @@ Configuration is resolved in this order of precedence (highest first):
 
 1. **Environment variables** — always win (great for deployments and CI).
 2. **`core/config/settings.json`** — written by `/provider` and the web Settings
-   popup. Git-ignored, file mode `600` because it holds secrets.
+   sidebar. Git-ignored, file mode `600` because it holds secrets.
 3. **Built-in defaults.**
 
 ### Settings file
@@ -424,7 +429,7 @@ curl -s -X POST http://127.0.0.1:8765/api/providers \
 ## 10. Troubleshooting
 
 **"Ollama does not appear to be running"** — Either start it (`ollama serve`) or
-switch provider. From the web Settings popup, open **Local (Ollama)** →
+switch provider. From the web Settings sidebar, open **Local (Ollama)** →
 **Install & download**. From the terminal, run `/provider local_setup`.
 
 **Cloud provider returns authentication errors** — Check that the key is saved

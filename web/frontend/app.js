@@ -9,7 +9,6 @@
   let sessionsCache = [];
   let settingsConfig = null;
   let selectedProvider = null;
-  let settingsView = "choose"; // "choose" | "configure"
 
   // ---- DOM -----------------------------------------------------------------
   const $ = (id) => document.getElementById(id);
@@ -31,7 +30,7 @@
   const settingsBtn = $("settings-btn");
   const settingsModal = $("settings-modal");
   const settingsClose = $("settings-close");
-  const settingsBack = $("settings-back");
+  const settingsScrim = $("settings-scrim");
   const settingsBody = $("settings-body");
   const toastWrap = $("toast-wrap");
   const composerHint = $("composer-hint");
@@ -763,9 +762,14 @@
     }, 3400);
   }
 
+  function toggleSettings() {
+    settingsModal.hidden ? openSettings() : closeSettings();
+  }
+
   function openSettings() {
-    settingsView = "choose";
     settingsModal.hidden = false;
+    settingsScrim.hidden = false;
+    if (settingsBtn) settingsBtn.setAttribute("aria-expanded", "true");
     settingsBody.innerHTML = '<p class="modal-loading">Loading…</p>';
     loadConfig()
       .then(renderSettings)
@@ -779,6 +783,8 @@
 
   function closeSettings() {
     settingsModal.hidden = true;
+    settingsScrim.hidden = true;
+    if (settingsBtn) settingsBtn.setAttribute("aria-expanded", "false");
   }
 
   async function loadConfig() {
@@ -793,13 +799,8 @@
     if (!cfg) return;
     if (!selectedProvider) selectedProvider = cfg.provider;
     settingsBody.innerHTML = "";
-    if (settingsView === "choose") renderChoose(cfg);
-    else renderConfigure(cfg, selectedProvider);
-  }
 
-  function renderChoose(cfg) {
-    settingsBack.hidden = true;
-
+    // The currently-active provider, called out at the top.
     const live = cfg.live || {};
     const activeLabel = (cfg.providers[cfg.provider] || {}).label || cfg.provider;
     settingsBody.appendChild(
@@ -820,9 +821,11 @@
       })
     );
 
+    // Provider list — tap a card to show its settings below.
     const grid = el("div", { class: "provider-grid" });
     for (const [name, info] of Object.entries(cfg.providers)) {
       const isActive = name === cfg.provider;
+      const isSelected = name === selectedProvider;
       let dotClass, statusText;
       if (name === "ollama") {
         const running = !!(cfg.ollama && cfg.ollama.running);
@@ -842,11 +845,11 @@
         el(
           "button",
           {
-            class: "provider-card" + (isActive ? " active" : ""),
+            class:
+              "provider-card" + (isSelected ? " selected" : "") + (isActive ? " active" : ""),
             type: "button",
             onclick: () => {
               selectedProvider = name;
-              settingsView = "configure";
               renderSettings();
             },
           },
@@ -858,31 +861,28 @@
             ]),
             el("div", { class: "pc-name", text: info.label }),
             el("div", { class: "pc-meta", text: statusText }),
-            el("div", { class: "pc-go", text: "Configure →" }),
           ]
         )
       );
     }
     settingsBody.appendChild(grid);
-  }
 
-  function renderConfigure(cfg, name) {
-    settingsBack.hidden = false;
-    const info = cfg.providers[name] || {};
-    const isActive = name === cfg.provider;
+    // Settings for the selected provider, right below the list.
+    const info = cfg.providers[selectedProvider] || {};
+    const isActive = selectedProvider === cfg.provider;
     settingsBody.appendChild(
       el("div", { class: "configure-head" }, [
-        el("span", { class: "pc-icon big", text: providerIcon(name) }),
+        el("span", { class: "pc-icon big", text: providerIcon(selectedProvider) }),
         el("div", {}, [
-          el("div", { class: "configure-title", text: info.label || name }),
+          el("div", { class: "configure-title", text: info.label || selectedProvider }),
           el("div", { class: "configure-sub", text: isActive ? "Active provider" : "Not active yet" }),
         ]),
         isActive ? el("span", { class: "pc-tag", text: "Active" }) : null,
       ])
     );
 
-    if (name === "ollama") renderOllamaSection(settingsBody, cfg);
-    else renderCloudSection(settingsBody, cfg, name);
+    if (selectedProvider === "ollama") renderOllamaSection(settingsBody, cfg);
+    else renderCloudSection(settingsBody, cfg, selectedProvider);
   }
 
   function renderCloudSection(section, cfg, name) {
@@ -945,7 +945,6 @@
           applyConfigToUI(settingsConfig);
           const used = (res.live && res.live.model) || modelInput.value.trim();
           toast("Now using " + (info.label || name) + " · " + used, "success");
-          settingsView = "choose";
           renderSettings();
         } catch (e) {
           toast("Could not connect: " + e.message, "error");
@@ -1137,7 +1136,6 @@
         await loadConfig();
         if (succeeded) {
           toast("Model ready: " + model, "success");
-          settingsView = "configure";
         }
         renderSettings();
       } catch {
@@ -1162,16 +1160,10 @@
   }
 
   // ---- settings wiring -----------------------------------------------------
-  settingsBtn.addEventListener("click", openSettings);
+  settingsBtn.addEventListener("click", toggleSettings);
   settingsClose.addEventListener("click", closeSettings);
-  modelBadge.addEventListener("click", openSettings);
-  settingsBack.addEventListener("click", () => {
-    settingsView = "choose";
-    renderSettings();
-  });
-  settingsModal.addEventListener("click", (e) => {
-    if (e.target === settingsModal) closeSettings();
-  });
+  modelBadge.addEventListener("click", toggleSettings);
+  settingsScrim.addEventListener("click", closeSettings);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !settingsModal.hidden) closeSettings();
   });
