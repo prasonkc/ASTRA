@@ -17,6 +17,9 @@ Firefox browser to the ASTRA core, both to **observe** the page and to
   visible text, selection, mouse position).
 - **Automate**: ASTRA can open/navigate tabs, search, click, type, press keys,
   scroll and evaluate JS — in the user's *own* browser, visibly.
+- **Chat**: the user can send a message to the running agent straight from the
+  popup and see the reply, continuing the same conversation as the terminal/web
+  UI.
 - **Work with either frontend**: the standalone terminal app (`cd core &&
   python main.py`) and the web wrapper (`./web/astra-web`) must both work, with
   no change to the extension.
@@ -42,6 +45,7 @@ running in the page's `MAIN` JS world (see §8).
 │         │                    browser_bridge.py                        │  │
 │         │   • page-context store            (extension → core)         │  │
 │         │   • command queue + condition     (core → extension → core)  │  │
+│         │   • message handler               (extension → core → ext)   │  │
 │         └───────▲──────────────────────────────────────────┬──────────┘  │
 │                 │                                          │             │
 │      browser_context_tool                      browser_control_tool      │
@@ -54,9 +58,9 @@ running in the page's `MAIN` JS world (see §8).
 ┌──────────────────────────────────▼─────────────────────────────────────┐
 │                        Firefox — ASTRA extension                        │
 │                                                                        │
-│  background.js   toggle • per-tab context • command poller • executors  │
+│  background.js   toggle • per-tab context • command poller • chat sender │
 │  content.js      page snapshot • mouse/selection • DOM command executor │
-│  popup.js/html   one integration button + status                        │
+│  popup.js/html   integration button + status • message box             │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -126,6 +130,38 @@ enqueue_command returns {success,result,error} ──▶ tool ──▶ agent hi
 
 ---
 
+## 4b. Data flow C — Chat (extension → core → extension)
+
+```
+popup.js ─ send (Enter/button) ─▶ background.js
+                                   │  chatState = {pending:true, message}
+                                   │  POST /api/browser/message {message}
+                                   │        (background owns the request,
+                                   │         so it survives popup close)
+   browser_bridge.run_message ─────┘
+        │  handler(message)   ← registered by the frontend
+        ▼
+   agent turn (same model/session/history as the frontend)
+        │  {ok, reply, error, session_id}
+        ▼
+   background.js  chatState = {pending:false, reply}
+   popup.js ─ poll "chat-state" every 600 ms until pending:false ─▶ render
+```
+
+- Unlike the command channel, no backend polling is needed: the agent is already
+  running, so the request is a plain synchronous POST that blocks until the turn
+  finishes.
+- The **background owns the POST**, not the popup, so closing the popup does not
+  cancel the turn; reopening it reads the current state.
+- Turn execution is serialized with the frontend's own turns (terminal
+  `Chat._turn_lock`, web `AstraService._lock`), so popup and in-app messages
+  never interleave.
+- Because the session is shared, a popup message is persisted in normal chat
+  history and can call every tool — including `browser_context` ("explain this
+  page") and the `ext_*` automation tools.
+
+---
+
 ## 5. Wire protocol (HTTP, localhost only)
 
 | Method | Path                                  | Body / params                     | Response |
@@ -135,6 +171,7 @@ enqueue_command returns {success,result,error} ──▶ tool ──▶ agent hi
 | DELETE | `/api/browser/context`                | —                                 | `{ok}` |
 | GET    | `/api/browser/commands`               | —                                 | `{command: {id,name,arguments}}` or `{command: null}` |
 | POST   | `/api/browser/commands/{id}/result`   | `{ok, result?, error?}`           | `{accepted}` / `404` |
+| POST   | `/api/browser/message`                | `{message}`                       | `{ok, reply, error, session_id}` |
 
 CORS: the extension runs on its own origin, so responses carry
 `Access-Control-Allow-Origin: *` and `OPTIONS` is handled. The listener binds
@@ -178,6 +215,9 @@ the rest are delegated to `content.js` via the `run-command` message.
 | `run-command`     | background → content | execute a DOM command → result |
 | `get-integration` | popup → background   | toggle state + status |
 | `set-integration` | popup → background   | flip integration |
+| `chat-send`       | popup → background   | start a chat turn → `{pending, message}` |
+| `chat-state`      | popup → background   | current chat state (polled while pending) |
+| `chat-clear`      | popup → background   | forget the last exchange |
 
 ---
 
@@ -224,6 +264,8 @@ the rest are delegated to `content.js` via the `run-command` message.
 | Slow page (>30 s) | navigation/search time out with "timed out waiting for page to load" |
 | astra-web already on :8765 | terminal bridge stays off; web serves the routes |
 | Frontend restarted | in-memory store is fresh; extension re-sends context on next poll/enable |
+| Popup chat, ASTRA not reachable | POST fails; popup shows "Could not reach ASTRA: …" |
+| Popup closed mid-turn | background-owned POST finishes; reply shown on reopen |
 
 **Known limitations**
 
@@ -247,11 +289,13 @@ the rest are delegated to `content.js` via the `run-command` message.
 | File | Responsibility |
 | ---- | -------------- |
 | `extension/firefox/manifest.json` | MV3 manifest; `<all_urls>` host permission, `storage` |
-| `extension/firefox/background.js` | toggle, per-tab context, command poller + executors |
+| `extension/firefox/background.js` | toggle, per-tab context, command poller + executors, chat sender |
 | `extension/firefox/content.js` | snapshot + mouse/selection + DOM command executor |
-| `extension/firefox/popup.*` | one-button integrate UI + status |
-| `core/browser_bridge.py` | page-context store + command queue/condition |
-| `core/browser_server.py` | terminal stdlib receiver for both channels |
+| `extension/firefox/popup.*` | integrate button + status + message box |
+| `core/browser_bridge.py` | page-context store + command queue/condition + message handler |
+| `core/browser_server.py` | terminal stdlib receiver for all channels |
 | `core/browser_context_tool.py` | `browser_context` tool (read snapshots) |
 | `core/browser_control_tool.py` | 12 `ext_*` tools (enqueue commands) |
-| `web/backend/app.py` | FastAPI routes for both channels |
+| `core/agent/chat.py` | terminal REPL; registers the popup chat handler |
+| `web/backend/astra_service.py` | web service; `run_message` for popup chat |
+| `web/backend/app.py` | FastAPI routes for all channels |

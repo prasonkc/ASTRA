@@ -11,6 +11,9 @@ the same whether the user runs the terminal app or the web app:
     POST   /api/browser/context   merge a page snapshot
     GET    /api/browser/context   return the latest snapshot
     DELETE /api/browser/context   forget the snapshot
+    GET    /api/browser/commands  claim the next queued browser command
+    POST   /api/browser/commands/<id>/result   report a command's result
+    POST   /api/browser/message   run one chat turn for the extension popup
 
 Configuration (environment variables):
 
@@ -28,7 +31,14 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 
-from browser_bridge import clear_context, get_context, next_command, set_context, submit_command_result
+from browser_bridge import (
+    clear_context,
+    get_context,
+    next_command,
+    run_message,
+    set_context,
+    submit_command_result,
+)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -61,6 +71,15 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _read_json(self) -> dict:
+        """Read and parse a JSON object body (``{}`` when empty)."""
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        raw = self.rfile.read(length) if length else b"{}"
+        data = json.loads(raw.decode("utf-8") if raw else "{}")
+        if not isinstance(data, dict):
+            raise ValueError("payload must be a JSON object")
+        return data
+
     def log_message(self, *args):  # keep the terminal output clean
         pass
 
@@ -85,6 +104,9 @@ class _Handler(BaseHTTPRequestHandler):
         if path == _ENDPOINT:
             self._handle_post_context()
             return
+        if path == "/api/browser/message":
+            self._handle_post_message()
+            return
         if path.startswith("/api/browser/commands/"):
             self._handle_post_command_result(path)
             return
@@ -92,11 +114,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _handle_post_context(self) -> None:
         try:
-            length = int(self.headers.get("Content-Length", 0) or 0)
-            raw = self.rfile.read(length) if length else b"{}"
-            data = json.loads(raw.decode("utf-8") if raw else "{}")
-            if not isinstance(data, dict):
-                raise ValueError("payload must be a JSON object")
+            data = self._read_json()
         except ValueError as exc:
             self._send_json(400, {"ok": False, "error": f"Invalid JSON: {exc}"})
             return
@@ -104,13 +122,24 @@ class _Handler(BaseHTTPRequestHandler):
         stored = set_context(data)
         self._send_json(200, {"ok": True, "received_at": stored.get("received_at")})
 
+    def _handle_post_message(self) -> None:
+        """Forward an extension chat message to the running agent.
+
+        Blocks until the turn finishes (the extension popup owns the request and
+        polls its own state), then returns ``{ok, reply, error, session_id}``.
+        """
+        try:
+            payload = self._read_json()
+        except ValueError as exc:
+            self._send_json(400, {"ok": False, "error": f"Invalid JSON: {exc}"})
+            return
+
+        result = run_message(str(payload.get("message", "")))
+        self._send_json(200, result)
+
     def _handle_post_command_result(self, path: str) -> None:
         try:
-            length = int(self.headers.get("Content-Length", 0) or 0)
-            raw = self.rfile.read(length) if length else b"{}"
-            payload = json.loads(raw.decode("utf-8") if raw else "{}")
-            if not isinstance(payload, dict):
-                raise ValueError("payload must be a JSON object")
+            payload = self._read_json()
         except ValueError as exc:
             self._send_json(400, {"ok": False, "error": f"Invalid JSON: {exc}"})
             return

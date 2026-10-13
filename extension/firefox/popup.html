@@ -6,7 +6,7 @@
     <style>
       body {
         font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-        width: 300px;
+        width: 320px;
         margin: 0;
         padding: 16px;
         background: #16181d;
@@ -15,7 +15,7 @@
       #integrate {
         display: block;
         width: 100%;
-        padding: 22px 16px;
+        padding: 18px 16px;
         font-family: inherit;
         font-size: 15px;
         font-weight: 600;
@@ -60,12 +60,134 @@
         color: #5b6472;
         text-align: center;
       }
+
+      /* ---- chat ---------------------------------------------------------- */
+      hr {
+        border: none;
+        border-top: 1px solid #262b36;
+        margin: 16px 0 12px;
+      }
+      #chat-title {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #8a93a3;
+        margin-bottom: 8px;
+      }
+      #chat-log {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: 180px;
+        overflow-y: auto;
+        margin-bottom: 8px;
+      }
+      #chat-log:empty {
+        display: none;
+      }
+      .bubble {
+        font-size: 12px;
+        line-height: 1.4;
+        padding: 7px 10px;
+        border-radius: 10px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .bubble.user {
+        align-self: flex-end;
+        max-width: 85%;
+        background: #232733;
+        color: #cfe9ff;
+        border: 1px solid #2f3646;
+      }
+      .bubble.astra {
+        align-self: flex-start;
+        max-width: 92%;
+        background: #10344a;
+        color: #e6f6ff;
+        border: 1px solid #1d5b7d;
+      }
+      .bubble.astra.error {
+        background: #3a1d1f;
+        color: #ffb4ae;
+        border-color: #5c2a2d;
+      }
+      .bubble.astra.pending {
+        color: #8a93a3;
+        font-style: italic;
+      }
+      textarea#chat-input {
+        box-sizing: border-box;
+        width: 100%;
+        resize: vertical;
+        min-height: 44px;
+        max-height: 120px;
+        padding: 8px 10px;
+        font-family: inherit;
+        font-size: 12.5px;
+        color: #e6e6e6;
+        background: #1d2129;
+        border: 1px solid #2f3646;
+        border-radius: 8px;
+        outline: none;
+      }
+      textarea#chat-input:focus {
+        border-color: #6fd3ff;
+      }
+      textarea#chat-input:disabled {
+        opacity: 0.6;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .row button {
+        font-family: inherit;
+        font-size: 12.5px;
+        font-weight: 600;
+        border-radius: 8px;
+        cursor: pointer;
+        border: 1px solid transparent;
+        padding: 8px 12px;
+      }
+      #chat-send {
+        flex: 1;
+        color: #0c1013;
+        background: #6fd3ff;
+      }
+      #chat-send:hover {
+        background: #8adcff;
+      }
+      #chat-send:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      #chat-clear {
+        color: #8a93a3;
+        background: transparent;
+        border-color: #2f3646;
+      }
+      #chat-clear:hover {
+        color: #e6e6e6;
+        background: #232733;
+      }
     </style>
   </head>
   <body>
     <button id="integrate" type="button">Integrate ASTRA with webpages</button>
     <div id="status"></div>
     <div id="endpoint"></div>
+
+    <hr />
+    <div id="chat-title">Message ASTRA</div>
+    <div id="chat-log"></div>
+    <textarea id="chat-input" rows="2" placeholder="Ask ASTRA anything… (Enter to send)"></textarea>
+    <div class="row">
+      <button id="chat-send" type="button">Send</button>
+      <button id="chat-clear" type="button">Clear</button>
+    </div>
 
     <script src="popup.js"></script>
   </body>

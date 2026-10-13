@@ -110,6 +110,7 @@ Supported API:
 | DELETE   | `/api/browser/context`             | Forget the page snapshot         |
 | GET      | `/api/browser/commands`            | Extension claims the next queued browser command |
 | POST     | `/api/browser/commands/{id}/result`| Extension reports a command's result |
+| POST     | `/api/browser/message`             | Extension popup sends a chat message; returns the agent's reply |
 
 ## Browser integration (Firefox extension)
 
@@ -133,6 +134,12 @@ open tabs, search, click and type visibly in your own Firefox. The command
 channel and full design are documented in
 `extension/firefox/ARCHITECTURE.md`; the web app serves both channels through
 FastAPI.
+
+The popup also has a small **Message ASTRA** box. It POSTs `{message}` to
+`POST /api/browser/message`; the running agent answers in the conversation the
+web UI already has open (same session and history) and the reply is returned to
+the popup. The web app runs the turn on its normal core worker thread, so popup
+messages and web chat turns are serialized and interleave correctly.
 
 This works with **either** frontend: the web app serves the routes through
 FastAPI, while the terminal app starts the same routes itself in a tiny stdlib

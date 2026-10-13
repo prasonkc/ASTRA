@@ -81,6 +81,21 @@ def submit_command_result(command_id: int, ok: bool, result=None, error: str = N
     )
 
 
+def run_browser_message(message: str) -> dict:
+    """Run one chat turn for the ASTRA Firefox extension popup.
+
+    The actual work happens in the handler registered by
+    :func:`register_browser_message_handler` (the running ``AstraService``), so
+    the popup shares the conversation the web UI is using.
+    """
+    return browser_bridge.run_message(message)
+
+
+def register_browser_message_handler() -> None:
+    """Tell the browser bridge how to run a chat turn in this process."""
+    browser_bridge.set_message_handler(get_service().run_message)
+
+
 def _build_model(model_name: Optional[str] = None, provider: Optional[str] = None) -> "AgentModel":
     """Construct the core model on the caller thread (the core worker).
 
@@ -355,6 +370,32 @@ class AstraService:
             finally:
                 # Reached when the client disconnects/aborts mid-stream.
                 stop_event.set()
+
+    def run_message(self, prompt: str) -> Dict:
+        """Run one chat turn for the browser extension and return its reply text.
+
+        Reuses :meth:`stream_chat`, so the extension popup shares one
+        conversation (session, history, provider) with the web UI and is
+        naturally serialized with web chat turns by the same lock.
+        """
+        content_parts: List[str] = []
+        error_text: Optional[str] = None
+        session_id: Optional[str] = None
+
+        for event in self.stream_chat(prompt):
+            etype = event.get("type")
+            if etype == "content":
+                content_parts.append(event.get("delta") or "")
+            elif etype == "session":
+                session_id = event.get("session_id")
+            elif etype == "error":
+                error_text = event.get("message")
+
+        return {
+            "reply": "".join(content_parts).strip(),
+            "session_id": session_id,
+            "error": error_text,
+        }
 
     def _op_chat_turn(self, prompt, session_id, events, stop_event) -> None:
         """Execute one chat turn on the core worker thread."""

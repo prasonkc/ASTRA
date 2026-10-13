@@ -1,8 +1,9 @@
 # ASTRA Firefox Extension
 
 Connects your local ASTRA agent to your real Firefox browser. It **observes** the
-page you are viewing (so ASTRA can explain it) and lets ASTRA **automate** the
-browser (tabs, navigation, search, clicking, typing) through tools.
+page you are viewing (so ASTRA can explain it), lets ASTRA **automate** the
+browser (tabs, navigation, search, clicking, typing) through tools, and lets you
+**chat** with the running agent straight from the popup.
 
 > For the full design — wire protocol, command lifecycle, security model — see
 > [`ARCHITECTURE.md`](ARCHITECTURE.md).
@@ -55,9 +56,22 @@ result"* — ASTRA calls `ext_search`, reads the results, calls `ext_click`, the
 `ext_read_page` to summarise it.
 
 Actions happen **visibly in your browser** and only while integration is on.
-Nothing is ever displayed in the popup: it only holds the toggle button and a
-small connection status. Nothing leaves your machine — data goes to
-`http://127.0.0.1:8765` (the local ASTRA backend).
+The popup shows only the toggle button, a small connection status, and the
+message box. Nothing leaves your machine — data goes to `http://127.0.0.1:8765`
+(the local ASTRA backend).
+
+### Message ASTRA
+
+The popup also has a small **Message ASTRA** box. Type a question and press
+**Send** (or Enter): it POSTs `{message}` to `POST /api/browser/message`, the
+running agent answers using the *same conversation* as the terminal and web UI,
+and the reply appears in the popup. The background script owns the request, so
+the reply still completes if you close the popup before it arrives — reopen it to
+see the result.
+
+Because the agent shares the session, a message sent from the browser is saved in
+your normal chat history and can use every tool, including `browser_context`
+(so *"explain this page"* works straight from the popup).
 
 ## Requirements
 
@@ -77,6 +91,8 @@ small connection status. Nothing leaves your machine — data goes to
    webpages**.
 5. Ask ASTRA about the page (*"What is this page about?"*) or ask it to act
    (*"open a new tab to example.com"*).
+6. Or type in the popup's **Message ASTRA** box and press Enter — the reply
+   appears right there (the same conversation as the terminal/web UI).
 
 The add-on is temporary and is removed when Firefox closes. A permanent install
 would need signing or a development profile.
@@ -103,6 +119,12 @@ ext_* tool ──enqueue──▶ browser_bridge command queue ◀── GET /ap
                      POST result   │                            │ execute
                                    └────────────────── background.js / content.js
                           └─────────────────────────────────────────────────┘
+
+                          ┌── chat ─────────────────────────────────────────┐
+popup Send ──chat-send──▶ background.js ──POST /api/browser/message──▶ agent turn
+     ▲                        (owns the request)                              │
+     └──────── poll chat-state ◀────────── {reply} ◀──────────────────────────┘
+                          └─────────────────────────────────────────────────┘
 ```
 
 - `content.js` builds the snapshot (debounced), tracks the mouse (throttled) and
@@ -117,15 +139,18 @@ ext_* tool ──enqueue──▶ browser_bridge command queue ◀── GET /ap
   re-sent constantly, and hands out one command per poll.
 - Disabling the button clears the stored snapshot on the backend
   (`DELETE /api/browser/context`) and stops the poller from picking up commands.
+- For **chat**, `background.js` owns the POST to `/api/browser/message` (so the
+  request survives the popup closing) and the popup polls `chat-state` for the
+  reply. The turn runs in the same session/history as the terminal or web UI.
 
 ## Files
 
 ```
 manifest.json    extension definition (Manifest V3)
 content.js       page snapshot + mouse + selection + DOM command executor
-background.js    integration toggle, per-tab state, context posts, command poller
-popup.html       single-button popup
-popup.js         toggle + connection status
+background.js    toggle, per-tab state, context posts, command poller, chat sender
+popup.html       toggle button + status + message box
+popup.js         toggle, connection status, chat send/poll
 ARCHITECTURE.md  full design: protocol, lifecycle, security, roadmap
 ```
 
@@ -140,6 +165,9 @@ ARCHITECTURE.md  full design: protocol, lifecycle, security, roadmap
 | `run-command`      | background → content | command result `{ ok, ... }`          |
 | `set-integration`  | popup → background   | `{ enabled, endpoint, status }`       |
 | `get-integration`  | popup → background   | `{ enabled, endpoint, status }`       |
+| `chat-send`        | popup → background   | `{ pending, message, ... }`           |
+| `chat-state`       | popup → background   | current chat state (polled)           |
+| `chat-clear`       | popup → background   | cleared chat state                    |
 
 ## Backend API used
 
@@ -150,6 +178,7 @@ ARCHITECTURE.md  full design: protocol, lifecycle, security, roadmap
 | DELETE | `/api/browser/context`              | Forget the snapshot                  |
 | GET    | `/api/browser/commands`             | Claim the next queued command        |
 | POST   | `/api/browser/commands/{id}/result` | Report a command's result            |
+| POST   | `/api/browser/message`              | Send a popup message to the agent; returns the reply |
 
 These routes are served by whichever ASTRA frontend is running: the web app
 (FastAPI) or the terminal app (its stdlib `browser_server.py` listener).

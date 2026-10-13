@@ -1,6 +1,8 @@
 import sys
+import threading
 import time
 import traceback
+import browser_bridge
 from ai.model import AgentModel
 from browser_server import browser_bridge_endpoint, start_browser_context_server
 from controller.provider_controller import ProviderController
@@ -23,6 +25,10 @@ class Chat:
             traceback.print_exc()
             sys.exit(1)
 
+        # Serializes turns between the terminal REPL and the browser bridge, which
+        # share the same model/history but run on different threads.
+        self._turn_lock = threading.Lock()
+
     def start(self):
         print(title("Welcome to ASTRA. Type 'exit' to quit."))
         try:
@@ -32,6 +38,7 @@ class Chat:
             pass
         print(dim("Session commands: /s new | /s list | /s <num> | /s resume | /s del <num> | /s clear"))
         print(dim("Provider: /provider (local_setup · openai · anthropic · gemini) | /model <name> | /thinking on|off"))
+        self._register_browser_message_handler()
         self._start_browser_bridge()
         self._safe_show_current_session()
 
@@ -64,41 +71,45 @@ class Chat:
                     self.session_controller.handle(user_input)
                     continue
 
-                # Generate response with error handling
-                try:
-                    response_stream = self.model.generate(user_input)
-                except Exception as e:
-                    print(error(f"Error generating response: {e}"))
-                    continue
-
-                print("ASTRA: ", end="", flush=True)
-
-                # Thinking indicator
-                dots = 0
-                for chunk in response_stream:
+                # Generate response with error handling. The model is shared
+                # with the browser bridge, so hold the turn lock for the whole
+                # turn to keep the two paths from interleaving (the browser
+                # popup blocks on the same lock when it sends a message).
+                with self._turn_lock:
                     try:
-                        if chunk.message.thinking:
-                            if not thinking:
-                                thinking = True
-                            thoughts += chunk.message.thinking
-                            dots = (dots + 1) % 4
-                            print("\rASTRA: " + "." * (dots) + " ", end="", flush=True)
-                            time.sleep(0.2)
-
-                        if chunk.message.content:
-                            if thinking:
-                                thinking = False
-                                print("\rASTRA: " + " " * 10 + "\r", end="", flush=True)
-                                print("ASTRA: ", end="", flush=True)
-
-                            content += chunk.message.content
-                            print(chunk.message.content, end="", flush=True)
+                        response_stream = self.model.generate(user_input)
                     except Exception as e:
-                        print(f"\n" + error(f"Error processing response chunk: {e}"))
-                        break
-                
+                        print(error(f"Error generating response: {e}"))
+                        continue
+
+                    print("ASTRA: ", end="", flush=True)
+
+                    # Thinking indicator
+                    dots = 0
+                    for chunk in response_stream:
+                        try:
+                            if chunk.message.thinking:
+                                if not thinking:
+                                    thinking = True
+                                thoughts += chunk.message.thinking
+                                dots = (dots + 1) % 4
+                                print("\rASTRA: " + "." * (dots) + " ", end="", flush=True)
+                                time.sleep(0.2)
+
+                            if chunk.message.content:
+                                if thinking:
+                                    thinking = False
+                                    print("\rASTRA: " + " " * 10 + "\r", end="", flush=True)
+                                    print("ASTRA: ", end="", flush=True)
+
+                                content += chunk.message.content
+                                print(chunk.message.content, end="", flush=True)
+                        except Exception as e:
+                            print(f"\n" + error(f"Error processing response chunk: {e}"))
+                            break
+
                 print()  # New line after response
-                
+
                 if thoughts:
                     print(dim(thoughts))
 
@@ -133,6 +144,50 @@ class Chat:
                 print(dim("Browser integration: off (disabled or port in use)"))
         except Exception as e:
             print(dim(f"Browser integration: not started ({e})"))
+
+    def _register_browser_message_handler(self):
+        """Let the extension popup send chat messages to this agent.
+
+        The handler runs on the bridge's HTTP thread, so it serializes with the
+        REPL via ``_turn_lock`` and reuses the same model, session and history —
+        a message sent from the browser continues the conversation the user
+        already has open in the terminal.
+        """
+        try:
+            browser_bridge.set_message_handler(self._handle_browser_message)
+        except Exception:
+            pass
+
+    def _handle_browser_message(self, message: str) -> dict:
+        """Run one chat turn for the browser extension popup.
+
+        Returns ``{"reply", "session_id", "error"}``; ``reply`` is the assistant's
+        final text (tool calls are executed as usual by the agent loop but not
+        surfaced here).
+        """
+        text = (message or "").strip()
+        if not text:
+            return {"reply": "", "session_id": getattr(self.model, "session_id", None), "error": "Message cannot be empty"}
+
+        parts = []
+        error_text = None
+        with self._turn_lock:
+            try:
+                for chunk in self.model.generate(text):
+                    try:
+                        piece = chunk.message.content
+                    except AttributeError:
+                        piece = None
+                    if piece:
+                        parts.append(piece)
+            except Exception as e:
+                error_text = str(e)
+
+        return {
+            "reply": "".join(parts).strip(),
+            "session_id": getattr(self.model, "session_id", None),
+            "error": error_text,
+        }
 
     def _safe_input(self, prompt: str) -> str | None:
         """Safely get user input, handling EOF and KeyboardInterrupt."""

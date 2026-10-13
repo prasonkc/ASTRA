@@ -19,6 +19,10 @@ let endpoint = DEFAULT_ENDPOINT;
 let activeTabId = null;
 let lastStatus = null; // { ok, message, at }
 
+// Last (and current) popup chat exchange. The background owns the request so it
+// survives the popup closing; the popup polls this via "chat-state".
+let chatState = { pending: false, message: "", reply: "", error: null, session_id: null, at: null };
+
 const tabState = new Map(); // tabId -> { context, mouse }
 
 let pageTimer = null;
@@ -138,6 +142,53 @@ async function setIntegration(enabled) {
   }
 
   return { enabled: integrated, endpoint, status: lastStatus };
+}
+
+/* ------------------------------------------------------------- chat send --- */
+
+function resetChatState() {
+  chatState = { pending: false, message: "", reply: "", error: null, session_id: null, at: null };
+  return { ...chatState };
+}
+
+function beginChat(message) {
+  chatState = { pending: true, message, reply: "", error: null, session_id: null, at: Date.now() };
+  runChatSend(message);
+  return { ...chatState, ok: true };
+}
+
+async function runChatSend(message) {
+  try {
+    const response = await fetch(`${endpoint}/api/browser/message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+
+    let data = {};
+    try {
+      data = await response.json();
+    } catch (err) {
+      data = {};
+    }
+
+    if (!response.ok) {
+      chatState = { ...chatState, pending: false, error: data.error || `HTTP ${response.status}` };
+    } else if (data.ok === false) {
+      chatState = { ...chatState, pending: false, error: data.error || "ASTRA could not answer." };
+    } else {
+      chatState = {
+        ...chatState,
+        pending: false,
+        reply: data.reply || "",
+        error: null,
+        session_id: data.session_id || null,
+      };
+    }
+  } catch (err) {
+    chatState = { ...chatState, pending: false, error: `Could not reach ASTRA: ${err}` };
+  }
+  chatState.at = Date.now();
 }
 
 /* ------------------------------------------------- command execution ----- */
@@ -436,6 +487,30 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((err) =>
         sendResponse({ enabled: integrated, endpoint, status: { ok: false, message: String(err) } })
       );
+    return true;
+  }
+
+  if (message.type === "chat-send") {
+    const text = String(message.message || "").trim();
+    if (!text) {
+      sendResponse({ ...chatState, ok: false, error: "Message cannot be empty" });
+      return true;
+    }
+    if (chatState.pending) {
+      sendResponse({ ...chatState, ok: false, error: "ASTRA is still replying\u2026" });
+      return true;
+    }
+    sendResponse(beginChat(text));
+    return true;
+  }
+
+  if (message.type === "chat-state") {
+    sendResponse({ ...chatState, endpoint });
+    return true;
+  }
+
+  if (message.type === "chat-clear") {
+    sendResponse(resetChatState());
     return true;
   }
 });

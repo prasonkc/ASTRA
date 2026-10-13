@@ -1,6 +1,6 @@
 """Shared in-memory bridge between ASTRA core and the ASTRA Firefox extension.
 
-Two channels are bridged here, both between the ASTRA process (terminal app or
+Three channels are bridged here, all between the ASTRA process (terminal app or
 web wrapper) and the browser extension:
 
 1. **Page context** — the extension *pushes* snapshots of the page the user is
@@ -16,6 +16,11 @@ web wrapper) and the browser extension:
          ▲                                                            │
          └─────────────── result/condition ──POST .../result◀───────┘
 
+3. **Chat messages** — the extension popup *posts* a message to the running
+   agent and shows the reply. The frontend registers a handler
+   (:func:`set_message_handler`); ``POST /api/browser/message`` calls
+   :func:`run_message`, which invokes it.
+
 Everything is in-memory and lock/condition guarded because the HTTP handlers
 (asyncio threadpool or the stdlib bridge thread) and the core worker thread run
 on different threads.
@@ -25,7 +30,7 @@ from __future__ import annotations
 import itertools
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 # --------------------------------------------------------------------------
 # Channel 1: page context
@@ -199,3 +204,74 @@ def command_poll_payload() -> Dict[str, Any]:
     """Payload for ``GET /api/browser/commands`` (HTTP layer helper)."""
     command = next_command()
     return {"command": command}
+
+
+# --------------------------------------------------------------------------
+# Channel 3: chat messages (extension popup -> ASTRA agent -> extension)
+# --------------------------------------------------------------------------
+# The extension popup can send a chat message straight to the running ASTRA
+# agent and show the reply. Unlike the command queue (core -> extension), this
+# flows the other way: the frontend owns the agent, so it *registers* a handler
+# that runs one turn; the shared HTTP route simply calls :func:`run_message`
+# and the handler does the work on whatever thread/worker that frontend uses.
+#
+#   popup ──POST /api/browser/message──▶ run_message ──▶ handler ──▶ agent
+#                              reply ◀──────────────────────────────┘
+
+_message_lock = threading.Lock()
+_message_handler: Optional[Callable[[str], Dict[str, Any]]] = None
+
+
+def set_message_handler(handler: Optional[Callable[[str], Dict[str, Any]]]) -> None:
+    """Register the callable that runs one chat turn for the extension.
+
+    The handler receives the raw message text and returns a dict like
+    ``{"reply": str, "session_id": str | None, "error": str | None}``.
+    """
+    global _message_handler
+    with _message_lock:
+        _message_handler = handler
+
+
+def clear_message_handler() -> None:
+    """Forget the chat handler (used on shutdown)."""
+    set_message_handler(None)
+
+
+def run_message(message: str) -> Dict[str, Any]:
+    """Run one chat turn for the extension and return a JSON-ready result.
+
+    Never raises: an empty message, a missing agent, or an agent error all come
+    back as ``{"ok": False, "error": "..."}`` so the HTTP layers stay trivial.
+    """
+    text = (message or "").strip()
+    if not text:
+        return {"ok": False, "reply": "", "error": "Message cannot be empty", "session_id": None}
+
+    with _message_lock:
+        handler = _message_handler
+
+    if handler is None:
+        return {
+            "ok": False,
+            "reply": "",
+            "error": "ASTRA chat is not available yet. Make sure ASTRA is running.",
+            "session_id": None,
+        }
+
+    try:
+        outcome = handler(text)
+    except Exception as exc:  # keep the bridge alive for the extension
+        return {"ok": False, "reply": "", "error": f"ASTRA failed to respond: {exc}", "session_id": None}
+
+    if isinstance(outcome, dict):
+        reply = str(outcome.get("reply") or "").strip()
+        error = outcome.get("error")
+        session_id = outcome.get("session_id")
+    else:
+        reply = str(outcome or "").strip()
+        error = None
+        session_id = None
+
+    ok = bool(reply) and not error
+    return {"ok": ok, "reply": reply, "error": error, "session_id": session_id}

@@ -25,6 +25,8 @@ from .astra_service import (
     command_poll_payload,
     get_browser_context,
     get_service,
+    register_browser_message_handler,
+    run_browser_message,
     set_browser_context,
     submit_command_result,
 )
@@ -33,8 +35,9 @@ from .astra_service import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Warm up the core (loads tools, resumes the last session) so the first
-    # request is fast.
+    # request is fast, then let the browser extension popup talk to it.
     get_service()
+    register_browser_message_handler()
     yield
 
 
@@ -106,6 +109,12 @@ class CommandResultPayload(BaseModel):
     ok: bool = True
     result: Optional[Any] = None
     error: Optional[str] = None
+
+
+class BrowserMessagePayload(BaseModel):
+    """A chat message sent from the ASTRA browser extension popup."""
+
+    message: str = ""
 
 
 @app.get("/api/files")
@@ -197,6 +206,16 @@ def browser_command_result(command_id: int, payload: CommandResultPayload):
     if not accepted:
         raise HTTPException(status_code=404, detail="Command not found or already finished")
     return {"accepted": True}
+
+
+@app.post("/api/browser/message")
+def browser_message(payload: BrowserMessagePayload):
+    """Run one chat turn for the ASTRA Firefox extension popup.
+
+    Shares the web UI's conversation, so a message sent from the browser appears
+    in the same session. Blocks until the turn finishes.
+    """
+    return run_browser_message(payload.message)
 
 
 # --- provider configuration --------------------------------------------------

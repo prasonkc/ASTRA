@@ -177,7 +177,7 @@ ASTRA/
 ├── core/                      # standalone terminal app — the source of truth
 │   ├── main.py                # terminal entry point
 │   ├── architecture.md        # sessions/history deep dive
-│   ├── browser_bridge.py      # shared in-memory page snapshot store
+│   ├── browser_bridge.py      # shared store: page snapshot, command queue, messages
 │   ├── browser_server.py      # localhost HTTP receiver for the extension
 │   ├── config/
 │   │   ├── identity.txt       # system prompt
@@ -296,11 +296,13 @@ cd core
 The terminal starts a tiny localhost HTTP listener (`core/browser_server.py`) on
 `127.0.0.1:8765` so the ASTRA Firefox extension can push the page the user is
 viewing straight into the core — no web app involved. Same routes as the web
-app (`POST|GET|DELETE /api/browser/context`, plus `GET /api/browser/commands` and
-`POST /api/browser/commands/<id>/result` for automation). Control it with
-`ASTRA_BROWSER_BRIDGE=0` (off), `ASTRA_BROWSER_HOST`, `ASTRA_BROWSER_PORT`. If
-the port is already taken (astra-web is running), the bridge stays off and the
-web server handles the requests instead.
+app (`POST|GET|DELETE /api/browser/context`, plus `GET /api/browser/commands`
+and `POST /api/browser/commands/<id>/result` for automation, and
+`POST /api/browser/message` so the extension popup can hold a conversation with
+the running agent). Control it with `ASTRA_BROWSER_BRIDGE=0` (off),
+`ASTRA_BROWSER_HOST`, `ASTRA_BROWSER_PORT`. If the port is already taken
+(astra-web is running), the bridge stays off and the web server handles the
+requests instead.
 
 ### Verify a fresh checkout
 
@@ -1025,6 +1027,32 @@ The tool blocks on a `threading.Condition` until the extension posts a result or
 > the page's JS world. The command channel is unauthenticated and localhost-only —
 > see the security section in `extension/firefox/ARCHITECTURE.md`.
 
+#### Browser chat messages — `POST /api/browser/message`
+
+The extension popup can hold a conversation with the running agent. It POSTs
+`{message}` to `POST /api/browser/message`; the frontend that owns the process
+(the terminal `Chat` or the web `AstraService`) registers a handler with
+:mod:`browser_bridge`, and :func:`browser_bridge.run_message` runs one
+**ordinary chat turn** — same model, session and history as the terminal/web UI —
+and returns `{ok, reply, error, session_id}`.
+
+This is the reverse of the command channel: the agent is *already running* and
+the browser is the caller, so no polling is needed on the backend side. Turn
+execution is serialized with the frontend's own turns (`Chat._turn_lock` in the
+terminal, `AstraService._lock` in the web app) so the two paths never interleave.
+
+```
+popup ──POST /api/browser/message {message}──▶ run_message ──▶ agent turn
+      ◀────────── {ok, reply, error, session_id} ─────────────────────┘
+```
+
+> **Maintainer notes.** Because the popup shares the session, a message sent from
+> the browser is persisted in normal chat history and can use every tool
+> (including `browser_context`, so "explain this page" works from the popup).
+> The background script owns the request, so it completes even if the popup is
+> closed before the reply arrives. Unauthenticated and localhost-only, like the
+> rest of the bridge.
+
 #### `playwright_tool.py` — `PlaywrightBrowserTool`
 
 Real Chromium automation via async Playwright. **Headed by default**
@@ -1218,19 +1246,29 @@ with `MAX_RESULT_CHARS = 20_000`.
   session, auto-titles brand-new conversations from the first prompt (≤60 chars),
   emits `session`, then forwards `thinking`/`content` and maps tool events to
   sequential ids (truncating large results), finally `done`/`error`.
+- `run_message(prompt) -> {reply, session_id, error}` — drains `stream_chat` and
+  returns just the reply text; backs the extension popup chat.
 - `get_service() -> AstraService` — lazy process singleton under a lock.
+
+**Browser bridge helpers.** `run_browser_message(message)` calls
+`browser_bridge.run_message` (the route handler);
+`register_browser_message_handler()` binds `get_service().run_message` as the
+popup chat handler. `app.py`'s `lifespan` calls the latter at startup.
 
 ### 11.4 `web/backend/app.py`
 
 FastAPI application. `lifespan` warms `get_service()` at startup so the first
-request is fast. Static files are served from `web/frontend` at `/static`; `/`
-returns `index.html`; `/favicon.ico` returns the SVG.
+request is fast and registers the browser-popup chat handler
+(`register_browser_message_handler`). Static files are served from
+`web/frontend` at `/static`; `/` returns `index.html`; `/favicon.ico` returns
+the SVG.
 
 Request models: `ChatRequest{message, session_id?}`,
 `NewSessionRequest{title?}`, `SwitchRequest{session_id}`,
 `ProviderRequest{provider, model?, api_key?, base_url?, thinking?}`,
-`ThinkingRequest{thinking}`, `LocalSetupRequest{model, install=True}`. See
-[§12](#12-http-api-reference) for the route table.
+`ThinkingRequest{thinking}`, `LocalSetupRequest{model, install=True}`,
+`BrowserContextPayload`, `CommandResultPayload`, `BrowserMessagePayload{message}`.
+See [§12](#12-http-api-reference) for the route table.
 
 ### 11.5 Generated files (`GET /api/files`)
 
@@ -1265,6 +1303,7 @@ All endpoints are on the FastAPI app. JSON bodies unless noted.
 | `DELETE` | `/api/browser/context` | — | `{ok}` |
 | `GET` | `/api/browser/commands` | — | `{command}` (`{id, name, arguments}` or `null`) |
 | `POST` | `/api/browser/commands/{id}/result` | `CommandResultPayload` | `{accepted}` (404 if unknown/finished) |
+| `POST` | `/api/browser/message` | `BrowserMessagePayload` | `{ok, reply, error, session_id}` (extension popup chat) |
 | `GET` | `/api/files?path=…` | — | file (inline) or 404 |
 | `GET` | `/` | — | `index.html` |
 | `GET` | `/favicon.ico` | — | `favicon.svg` or 404 |
@@ -1693,6 +1732,9 @@ Provider/model aliases: `local`→`ollama`, `gpt`→`openai`, `claude`→`anthro
 | `POST` | `/api/browser/context` | no | Receive a page snapshot from the ASTRA Firefox extension |
 | `GET` | `/api/browser/context` | no | Latest page snapshot |
 | `DELETE` | `/api/browser/context` | no | Forget the page snapshot |
+| `GET` | `/api/browser/commands` | no | Extension claims the next queued browser command |
+| `POST` | `/api/browser/commands/{id}/result` | no | Extension reports a command's result |
+| `POST` | `/api/browser/message` | no | Extension popup sends a chat message to the running agent |
 | `GET` | `/api/files` | no | Serve a generated file |
 
 ---
@@ -1727,6 +1769,7 @@ A quick map of the most important symbols to their files.
 | `BrowserControlTool` | `core/tools/browser_control_tool.py` |
 | `set_context`, `get_context`, `clear_context` | `core/browser_bridge.py` |
 | `enqueue_command`, `next_command`, `submit_command_result` | `core/browser_bridge.py` |
+| `set_message_handler`, `run_message` | `core/browser_bridge.py` |
 | `start_browser_context_server`, `browser_bridge_endpoint` | `core/browser_server.py` |
 | `PlaywrightBrowserTool` | `core/tools/playwright_tool.py` |
 | `FileReaderTool` | `core/tools/file_reader_tool.py` |
@@ -1735,5 +1778,5 @@ A quick map of the most important symbols to their files.
 | `ExcelTool` | `core/tools/excel_tool.py` |
 | `Colors`, `colorize`, color helpers | `core/utils/colors.py` |
 | `app`, route handlers | `web/backend/app.py` |
-| `AstraService`, `get_service` | `web/backend/astra_service.py` |
+| `AstraService`, `get_service`, `run_browser_message`, `register_browser_message_handler` | `web/backend/astra_service.py` |
 | `main`, `_parse_args` | `web/backend/run.py` |
