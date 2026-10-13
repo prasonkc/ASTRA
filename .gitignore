@@ -24,6 +24,9 @@ core/config/settings.json
 # Downloads and generated documents
 downloads/
 
+# Voice layer — downloaded/built local speech models (large, machine-specific)
+voice/models/
+
 # Editors / IDEs
 .vscode/
 .idea/

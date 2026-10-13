@@ -1,0 +1,12 @@
+# ASTRA voice wrapper — optional Python extras.
+#
+# The voice layer works without these by shelling out to arecord/aplay/ffmpeg,
+# but sounddevice+numpy give it a cleaner, cross-platform audio backend and are
+# required for hands-free `--listen` mode.
+#
+#   pip install -r voice/requirements.txt
+#
+# On Linux, sounddevice also needs the system PortAudio library:
+#   sudo apt-get install libportaudio2   # Debian/Ubuntu
+sounddevice>=0.4.6
+numpy>=1.24

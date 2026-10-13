@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+#
+# astra-voice — single entry point for the ASTRA voice wrapper.
+#
+# Runs a fully local speech layer on top of the same virtual environment as the
+# standalone terminal/web apps: whisper.cpp for speech-to-text and piper for
+# text-to-speech. Audio I/O uses the optional Python extras (sounddevice+numpy)
+# when present, otherwise it falls back to command-line tools.
+#
+# Usage:
+#   ./voice/astra-voice                  # push-to-talk conversation
+#   ./voice/astra-voice --listen         # hands-free (needs sounddevice)
+#   ./voice/astra-voice --file clip.wav  # process one audio file
+#   ./voice/astra-voice --status         # show readiness
+#   ./voice/astra-voice --setup          # download local models
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CORE_DIR="${REPO_DIR}/core"
+VENV_DIR="${ASTRA_VENV:-${CORE_DIR}/.venv}"
+PYTHON_BIN="${ASTRA_PYTHON:-${VENV_DIR}/bin/python}"
+
+c_blue=$'\033[94m'; c_green=$'\033[92m'; c_yellow=$'\033[93m'; c_red=$'\033[91m'; c_reset=$'\033[0m'
+log()  { printf '%s[astra-voice]%s %s\n' "${c_blue}" "${c_reset}" "$*"; }
+ok()   { printf '%s[astra-voice]%s %s\n' "${c_green}" "${c_reset}" "$*"; }
+warn() { printf '%s[astra-voice]%s %s\n' "${c_yellow}" "${c_reset}" "$*"; }
+fail() { printf '%s[astra-voice]%s %s\n' "${c_red}" "${c_reset}" "$*" >&2; exit 1; }
+
+# --- Ensure a Python environment exists -------------------------------------
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  if [[ -n "${ASTRA_PYTHON:-}" ]]; then
+    fail "ASTRA_PYTHON is set but not executable: ${PYTHON_BIN}"
+  fi
+  log "Creating virtual environment at ${VENV_DIR}"
+  python3 -m venv "${VENV_DIR}" || fail "Failed to create virtual environment (is python3 installed?)"
+fi
+
+# --- Install dependencies (only when needed) --------------------------------
+REQ_CORE="${REPO_DIR}/requirements.txt"
+REQ_VOICE="${SCRIPT_DIR}/requirements.txt"
+
+if ! "${PYTHON_BIN}" -c "import ollama" >/dev/null 2>&1; then
+  log "Installing core dependencies…"
+  "${PYTHON_BIN}" -m pip install --quiet --upgrade pip
+  [[ -f "${REQ_CORE}" ]] && "${PYTHON_BIN}" -m pip install --quiet -r "${REQ_CORE}"
+fi
+
+# The audio extras are OPTIONAL (shell tools work without them). Install them
+# best-effort and never abort the session if they cannot be built on this host.
+if [[ -f "${REQ_VOICE}" ]] && ! "${PYTHON_BIN}" -c "import sounddevice, numpy" >/dev/null 2>&1; then
+  log "Installing optional voice extras (sounddevice, numpy)…"
+  if ! "${PYTHON_BIN}" -m pip install --quiet -r "${REQ_VOICE}"; then
+    warn "Optional audio extras failed to install; falling back to command-line audio."
+    warn "Install 'libportaudio2' (Debian/Ubuntu) or your platform's PortAudio, then retry."
+  fi
+fi
+
+ok "Starting ASTRA Voice…"
+exec "${PYTHON_BIN}" "${SCRIPT_DIR}/backend/run.py" "$@"

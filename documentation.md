@@ -7,16 +7,17 @@
 > architecture, configuration, data model, HTTP API and operational notes.
 >
 > **Related documents:** [`README.md`](README.md) (user-facing quick start),
-> [`web/README.md`](web/README.md) (web wrapper), and
+> [`web/README.md`](web/README.md) (web wrapper),
+> [`voice/README.md`](voice/README.md) (voice wrapper), and
 > [`core/architecture.md`](core/architecture.md) (deep dive on sessions and
 > history).
 
 | Field | Value |
 |-------|-------|
 | Project | ASTRA — AI academic assistant |
-| Entry points | `core/main.py` (terminal), `web/backend/run.py` (web) |
+| Entry points | `core/main.py` (terminal), `web/backend/run.py` (web), `voice/backend/run.py` (voice) |
 | Runtime | Python 3.10+ (developed on 3.14) |
-| Last updated | 2026-10-12 |
+| Last updated | 2026-10-13 |
 | License | See [`LICENSE`](LICENSE) |
 
 ---
@@ -34,15 +35,16 @@
 9. [Controllers & CLI commands](#9-controllers--cli-commands)
 10. [Tool system](#10-tool-system)
 11. [Web application](#11-web-application)
-12. [HTTP API reference](#12-http-api-reference)
-13. [Frontend reference](#13-frontend-reference)
-14. [Utilities & assets](#14-utilities--assets)
-15. [Development guide](#15-development-guide)
-16. [Data & file locations](#16-data--file-locations)
-17. [Security & privacy](#17-security--privacy)
-18. [Known limitations & technical debt](#18-known-limitations--technical-debt)
-19. [Troubleshooting](#19-troubleshooting)
-20. [Glossary](#20-glossary)
+12. [Voice application](#12-voice-application)
+13. [HTTP API reference](#13-http-api-reference)
+14. [Frontend reference](#14-frontend-reference)
+15. [Utilities & assets](#15-utilities--assets)
+16. [Development guide](#16-development-guide)
+17. [Data & file locations](#17-data--file-locations)
+18. [Security & privacy](#18-security--privacy)
+19. [Known limitations & technical debt](#19-known-limitations--technical-debt)
+20. [Troubleshooting](#20-troubleshooting)
+21. [Glossary](#21-glossary)
 
 Appendices: [A. Environment variables](#appendix-a-environment-variables) ·
 [B. Tool catalog](#appendix-b-tool-catalog) ·
@@ -109,8 +111,14 @@ asks its settings layer which backend to use, and talks only to a normalized
    web/backend/run.py     │      │                                        │
       └▶ FastAPI ─▶        │      └── ChatHistory (SQLite) ──▶ disk        │
          AstraService ────▶│                                              │
-            (1 worker     └──────────────────────────────────────────────┘
-             thread)                          ▲
+            (1 worker     │                                              │
+             thread)      │                                              │
+   voice:                 │                                              │
+   voice/backend/run.py   │                                              │
+      └▶ VoiceLoop ─▶      │                                             │
+         VoiceAgent ──────▶│  (embeds AstraService; whisper.cpp + piper)  │
+                          └──────────────────────────────────────────────┘
+                                              ▲
                                               │ shared
                                        core/config/settings.json
                                        (provider/model/keys/thinking)
@@ -130,6 +138,7 @@ asks its settings layer which backend to use, and talks only to a normalized
 | Memory | `core/memory/` | SQLite conversation store + long-term memory. |
 | Web backend | `web/backend/` | FastAPI routes + a thin, thread-safe service wrapper. |
 | Web frontend | `web/frontend/` | Vanilla HTML/CSS/JS single-page app. |
+| Voice backend | `voice/backend/` | Optional speech layer (whisper.cpp STT, piper TTS) and a loop that embeds the core. |
 | Utilities | `core/utils/colors.py` | ANSI colors for terminal output. |
 
 ### A chat turn, end to end
@@ -233,15 +242,32 @@ ASTRA/
         ├── styles.css
         ├── app.js
         └── favicon.svg
-└── extension/                 # ASTRA Firefox extension (observe + automate)
-    └── firefox/
-        ├── manifest.json      # MV3 manifest
-        ├── background.js      # toggle, per-tab context, command poller
-        ├── content.js         # page snapshot + mouse/selection + DOM executor
-        ├── popup.html         # one-button integrate UI
-        ├── popup.js           # toggle + status
-        ├── README.md
-        └── ARCHITECTURE.md    # protocol, lifecycle, security, roadmap
+├── extension/                 # ASTRA Firefox extension (observe + automate)
+│   └── firefox/
+│       ├── manifest.json      # MV3 manifest
+│       ├── background.js      # toggle, per-tab context, command poller
+│       ├── content.js         # page snapshot + mouse/selection + DOM executor
+│       ├── popup.html         # one-button integrate UI
+│       ├── popup.js           # toggle + status
+│       ├── README.md
+│       └── ARCHITECTURE.md    # protocol, lifecycle, security, roadmap
+└── voice/                     # optional local speech frontend (whisper.cpp + piper)
+    ├── astra-voice            # single launcher (bash)
+    ├── requirements.txt       # optional audio extras (sounddevice, numpy)
+    ├── README.md
+    ├── ARCHITECTURE.md        # pipeline, data flows, degradation, roadmap
+    ├── models/                # downloaded models (git-ignored)
+    └── backend/
+        ├── __init__.py
+        ├── run.py             # entrypoint (arg parsing, mode dispatch)
+        ├── config.py          # env-first resolution of binaries/models/devices
+        ├── deps.py            # readiness detection + report
+        ├── audio.py           # record / VAD / play / 16 kHz conversion
+        ├── stt.py             # whisper.cpp wrapper (speech → text)
+        ├── tts.py             # piper wrapper (text → speech)
+        ├── agent.py           # bridge to the core (reuses AstraService)
+        ├── voice_loop.py      # record → transcribe → ask → speak
+        └── install.py         # --setup: build/download local models
 ```
 
 ---
@@ -259,6 +285,9 @@ Python dependencies:
 - `requirements.txt` (core): `ollama`, `requests`, `beautifulsoup4`, `lxml`,
   `rich`, `python-docx`, `python-pptx`, `openpyxl`.
 - `web/requirements.txt` (web backend): `fastapi`, `uvicorn`.
+- `voice/requirements.txt` (voice, **optional**): `sounddevice`, `numpy` — only
+  for the cleaner audio backend and `--listen`; the voice layer otherwise shells
+  out to `arecord`/`aplay`/`ffmpeg`.
 
 Two optional features require packages that are **not** declared in
 `requirements.txt` and must be installed manually:
@@ -303,6 +332,23 @@ the running agent). Control it with `ASTRA_BROWSER_BRIDGE=0` (off),
 `ASTRA_BROWSER_HOST`, `ASTRA_BROWSER_PORT`. If the port is already taken
 (astra-web is running), the bridge stays off and the web server handles the
 requests instead.
+
+### Run the voice app
+
+The optional voice wrapper adds a local speech layer (whisper.cpp for
+speech-to-text, piper for text-to-speech) and runs the same core in a voice loop:
+
+```bash
+./voice/astra-voice --setup          # one-time: fetch models, build whisper.cpp
+./voice/astra-voice                  # push-to-talk conversation
+./voice/astra-voice --listen         # hands-free (needs sounddevice extras)
+./voice/astra-voice --status         # show readiness / what is missing
+```
+
+It reuses `core/.venv` and needs no web server. Audio uses the optional Python
+extras (`sounddevice`+`numpy`) when present, otherwise `arecord`/`aplay` or
+`ffmpeg`. See [section 12](#12-voice-application) and
+[`voice/README.md`](voice/README.md).
 
 ### Verify a fresh checkout
 
@@ -355,7 +401,9 @@ Created on first save:
   all providers can coexist; switching providers does not erase a key.
 
 See [Appendix A](#appendix-a-environment-variables) for the full environment
-variable list. Note that base URLs have any trailing slash stripped.
+variable list. Note that base URLs have any trailing slash stripped. The optional
+voice wrapper has its own `ASTRA_VOICE_*` variables, resolved separately (see
+[section 12](#12-voice-application)).
 
 ---
 
@@ -891,7 +939,7 @@ parameters as keyword arguments.
 **Maintainer notes.** The `playwright` category alone defines 25 tools, more than
 `MAX_TOOLS`, so it can never be fully selected in one query. Keyword scoring is
 naive substring matching. `playwright` is imported at module import time with no
-fallback (see §18). The always-included categories (`core`, `browser_context`,
+fallback (see §19). The always-included categories (`core`, `browser_context`,
 `browser_control`) already occupy 16 of the 20 slots, so keep new always-on tools
 rare.
 
@@ -1268,7 +1316,7 @@ Request models: `ChatRequest{message, session_id?}`,
 `ProviderRequest{provider, model?, api_key?, base_url?, thinking?}`,
 `ThinkingRequest{thinking}`, `LocalSetupRequest{model, install=True}`,
 `BrowserContextPayload`, `CommandResultPayload`, `BrowserMessagePayload{message}`.
-See [§12](#12-http-api-reference) for the route table.
+See [§13](#13-http-api-reference) for the route table.
 
 ### 11.5 Generated files (`GET /api/files`)
 
@@ -1280,7 +1328,119 @@ served inline.
 
 ---
 
-## 12. HTTP API reference
+## 12. Voice application
+
+An **optional** local speech frontend (`voice/`). Like the web wrapper it embeds
+the core and drives it; it adds a microphone and a speaker but no new server and
+no new agent logic. Everything runs on-device. Full design in
+[`voice/ARCHITECTURE.md`](voice/ARCHITECTURE.md); usage in
+[`voice/README.md`](voice/README.md).
+
+```
+microphone ─▶ whisper.cpp (STT) ─▶ ASTRA agent ─▶ piper (TTS) ─▶ speaker
+```
+
+### 12.1 Launcher — `voice/astra-voice`
+
+A bash launcher mirroring `web/astra-web`: it reuses
+`VENV_DIR=${ASTRA_VENV:-core/.venv}`, installs the core dependencies if missing,
+installs the **optional** audio extras (`sounddevice`, `numpy`) *best-effort*
+(failure falls back to command-line audio), then `exec`s
+`python voice/backend/run.py "$@"`.
+
+### 12.2 `voice/backend/run.py`
+
+Arg-parsing and mode dispatch. Modes: `--status`, `--setup`, `--file PATH`,
+`--text TEXT`, `--say TEXT`, `--seconds N`, `--listen`, and the default
+push-to-talk loop. Flags: `--stt-only`, `--no-tts`, `--no-stream`, `--model`,
+`--models-dir`. It validates the pieces the chosen mode needs via
+`deps.build_status()` and exits with a clear message (and a non-zero code) when
+something is missing.
+
+### 12.3 `voice/backend/config.py` — `VoiceConfig`
+
+Resolves every location env-first: `ASTRA_VOICE_WHISPER_BIN`,
+`ASTRA_VOICE_STT_MODEL`, `ASTRA_VOICE_PIPER_BIN`, `ASTRA_VOICE_TTS_MODEL`,
+`ASTRA_VOICE_MODELS_DIR`, `ASTRA_VOICE_LANG`, `ASTRA_VOICE_THREADS`,
+`ASTRA_VOICE_INPUT_DEVICE`/`_OUTPUT_DEVICE`, `ASTRA_VOICE_AUDIO_BACKEND`,
+`ASTRA_VOICE_KEEP_AUDIO`. Binaries fall back to a project-local build then
+`PATH`; models are auto-discovered by glob (`ggml-*.bin` preferring `.en`,
+`*.onnx`). Repository constants `VOICE_DIR`/`REPO_DIR`/`CORE_DIR`/`WEB_DIR` are
+defined here.
+
+### 12.4 `voice/backend/audio.py` — `AudioIO`
+
+Two interchangeable backends: **sounddevice** (`sounddevice`+`numpy`, supports
+clean stop and VAD) and **cli** (`arecord`/`ffmpeg`/`rec` for capture,
+`aplay`/`ffplay`/`play` for playback). `select_backend("auto")` prefers
+sounddevice. Key methods: `record(seconds?, stop_event?)` (fixed length or
+Enter-terminated), `record_utterance(...)` (energy-gate VAD for `--listen`),
+`play(path)`, and the module-level `ensure_wav16k(path)` which converts any input
+to whisper's required 16 kHz mono 16-bit PCM (no-op when already correct; uses
+`ffmpeg` or `sox`). `AudioError` signals a hard failure.
+
+### 12.5 `voice/backend/stt.py` — `WhisperCppSTT`
+
+Invokes `whisper-cli -m MODEL -f WAV -otxt -of BASE -nt -l LANG [-t N]`, prefers
+the `.txt` sidecar and falls back to stdout, then `clean_transcript()` strips
+timestamps and non-speech markers (`[BLANK_AUDIO]`, `[Music]`, …). `WhisperError`
+on missing binary / empty output.
+
+### 12.6 `voice/backend/tts.py` — `PiperTTS`
+
+Feeds text on stdin to `piper -m VOICE -f OUT [-s SPEAKER]` and returns the WAV
+path. `PiperError` on failure or empty text.
+
+### 12.7 `voice/backend/agent.py` — `VoiceAgent`
+
+The bridge to the core. It reuses `web.backend.astra_service.AstraService`
+(added to `sys.path` via `REPO_DIR`) so the thread-affine core handling is not
+duplicated and provider/model selection stays shared. `ask(prompt, on_delta,
+on_tool)` consumes `AstraService.stream_chat()` and returns
+`{reply, error, session_id, tools}`; `on_delta` receives content fragments for
+live printing. `AgentError` wraps initialisation failures.
+
+### 12.8 `voice/backend/voice_loop.py` — `VoiceLoop`
+
+Orchestrates a turn: `handle_wav()` (transcribe → answer → speak) and
+`handle_text()`. Interaction modes: `run_interactive()` (push-to-talk; typing
+sends text; `q` quits) and `run_listen()` (hands-free, sounddevice only). A failed
+utterance or TTS hiccup is reported and the loop continues. `_paint()` provides
+optional ANSI colour.
+
+### 12.9 `voice/backend/deps.py`
+
+`build_status(config)` returns a `VoiceStatus` (readiness flags, resolved paths,
+`problems`, `notes`); `format_status()` renders the `--status` report. `stt` and
+`audio` are required for a conversation; `tts` is optional (degradation note
+added automatically).
+
+### 12.10 `voice/backend/install.py`
+
+`--setup`. `build_whisper_cpp()` (git clone + cmake, with manual instructions
+when tools are missing), `ensure_whisper_model()` (Hugging Face `ggml-*.bin`),
+`install_piper()` (platform release asset into `voice/models/piper/`), and
+`ensure_piper_voice()` (Hugging Face `.onnx` + `.onnx.json`). Idempotent and
+network-failure tolerant.
+
+### 12.11 Environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ASTRA_VOICE_WHISPER_BIN` | autodetect | whisper.cpp CLI |
+| `ASTRA_VOICE_STT_MODEL` | autodetect | `ggml-*.bin` model |
+| `ASTRA_VOICE_PIPER_BIN` | autodetect | `piper` binary |
+| `ASTRA_VOICE_TTS_MODEL` | autodetect | piper `.onnx` voice |
+| `ASTRA_VOICE_MODELS_DIR` | `voice/models` | model directory |
+| `ASTRA_VOICE_LANG` | `en` | whisper language |
+| `ASTRA_VOICE_THREADS` | whisper default | whisper thread count |
+| `ASTRA_VOICE_INPUT_DEVICE` / `ASTRA_VOICE_OUTPUT_DEVICE` | system default | audio devices |
+| `ASTRA_VOICE_AUDIO_BACKEND` | `auto` | `auto`/`sounddevice`/`cli` |
+| `ASTRA_VOICE_KEEP_AUDIO` | off | keep temporary WAVs |
+
+---
+
+## 13. HTTP API reference
 
 All endpoints are on the FastAPI app. JSON bodies unless noted.
 
@@ -1349,12 +1509,12 @@ curl -N -s -X POST http://127.0.0.1:8765/api/chat \
 
 ---
 
-## 13. Frontend reference
+## 14. Frontend reference
 
 The frontend is a dependency-free single-page app in `web/frontend/`. All code is
 inside one IIFE in `app.js`.
 
-### 13.1 `index.html`
+### 14.1 `index.html`
 
 Structural shell:
 
@@ -1369,7 +1529,7 @@ Structural shell:
   containing `#settings-close` and `#settings-body`.
 - `#toast-wrap` for notifications.
 
-### 13.2 `app.js`
+### 14.2 `app.js`
 
 **Global state:** `currentSessionId`, `streaming`, `abortController`,
 `sessionsCache`, `settingsConfig`, `selectedProvider`.
@@ -1439,7 +1599,7 @@ persisted transcript, re-pairing tool cards with `role: "tool"` messages.
   `Esc`), `toast(message, kind)`, `checkHealth()`, and `init()` (health →
   sessions → messages → config → focus).
 
-### 13.3 `styles.css`
+### 14.3 `styles.css`
 
 Black + gold theme driven by CSS variables in `:root`:
 
@@ -1457,14 +1617,14 @@ suggestions; composer + error lines; scrollbars; responsive rules at `@820px`
 `.active-banner`, `.provider-grid`/`.provider-card`/`.pc-*`, fields/chips/buttons,
 callouts, `.thinking-row`, progress and setup log); and toasts.
 
-### 13.4 `favicon.svg`
+### 14.4 `favicon.svg`
 
 A 64×64 black rounded square with a gold gradient inner square and a bold black
 "A".
 
 ---
 
-## 14. Utilities & assets
+## 15. Utilities & assets
 
 - **`core/utils/colors.py`** — `Colors` ANSI constants (`RESET`, `BOLD`, `DIM`,
   foregrounds, backgrounds); `colorize(text, color)`; and wrappers `error`,
@@ -1489,7 +1649,7 @@ is run from source.
 
 ---
 
-## 15. Development guide
+## 16. Development guide
 
 ### Adding a provider
 
@@ -1557,7 +1717,7 @@ development.
 
 ---
 
-## 16. Data & file locations
+## 17. Data & file locations
 
 | Data | Default location | Override |
 |------|------------------|----------|
@@ -1567,10 +1727,11 @@ development.
 | Downloads / generated files | `core/downloads/` | tool argument |
 | Virtualenv | `core/.venv` | `ASTRA_VENV` |
 | Python binary | `core/.venv/bin/python` | `ASTRA_PYTHON` |
+| Speech models (voice) | `voice/models/` (git-ignored) | `ASTRA_VOICE_MODELS_DIR` |
 
 ---
 
-## 17. Security & privacy
+## 18. Security & privacy
 
 - **Keys** are stored only in `core/config/settings.json`, which is git-ignored
   and written with mode `600`. The web backend only ever returns a masked form
@@ -1590,7 +1751,7 @@ development.
 
 ---
 
-## 18. Known limitations & technical debt
+## 19. Known limitations & technical debt
 
 These are accurate as of the last update and are good first tasks for a new
 maintainer.
@@ -1616,11 +1777,18 @@ maintainer.
   and several unused color/typing imports remain.
 - **Frontend duplication of session state.** `currentSessionId` is tracked
   client-side and on the server; recovery logic exists on both sides.
+- **Voice frontends are separate processes.** `voice/astra-voice` embeds the core
+  like `web/`; running it alongside the terminal or web app yields independent
+  in-memory sessions (they share only the SQLite history file). Run one frontend
+  at a time for a single live conversation.
+- **Voice speech stack is not exercised by tests.** whisper.cpp/piper are
+  external binaries invoked per turn; use `--status` and `--file` for manual
+  verification.
 - **No automated test suite** is checked in.
 
 ---
 
-## 19. Troubleshooting
+## 20. Troubleshooting
 
 **"Ollama does not appear to be running."** Start it (`ollama serve`) or switch
 provider. Web: Settings → Local (Ollama) → Install & download. Terminal:
@@ -1656,7 +1824,7 @@ restart (`run.py --reload` for auto-reload).
 
 ---
 
-## 20. Glossary
+## 21. Glossary
 
 | Term | Meaning |
 |------|---------|
@@ -1691,6 +1859,16 @@ restart (`run.py --reload` for auto-reload).
 | `ASTRA_DB_PATH` | `core/memory/chat_history.db` | Conversation DB location |
 | `ASTRA_VENV` | `core/.venv` | Virtualenv used by the launcher |
 | `ASTRA_PYTHON` | venv python | Explicit Python binary |
+| `ASTRA_VOICE_WHISPER_BIN` | autodetect | whisper.cpp CLI (voice) |
+| `ASTRA_VOICE_STT_MODEL` | autodetect | whisper `ggml-*.bin` model (voice) |
+| `ASTRA_VOICE_PIPER_BIN` | autodetect | `piper` binary (voice) |
+| `ASTRA_VOICE_TTS_MODEL` | autodetect | piper `.onnx` voice (voice) |
+| `ASTRA_VOICE_MODELS_DIR` | `voice/models` | Speech model directory (voice) |
+| `ASTRA_VOICE_LANG` | `en` | whisper language code (voice) |
+| `ASTRA_VOICE_THREADS` | whisper default | whisper thread count (voice) |
+| `ASTRA_VOICE_INPUT_DEVICE` / `ASTRA_VOICE_OUTPUT_DEVICE` | system default | audio devices (voice) |
+| `ASTRA_VOICE_AUDIO_BACKEND` | `auto` | `auto`/`sounddevice`/`cli` (voice) |
+| `ASTRA_VOICE_KEEP_AUDIO` | off | keep temporary WAVs (voice) |
 
 Provider/model aliases: `local`→`ollama`, `gpt`→`openai`, `claude`→`anthropic`,
 `google`/`google-gemini`→`gemini`.
@@ -1780,3 +1958,12 @@ A quick map of the most important symbols to their files.
 | `app`, route handlers | `web/backend/app.py` |
 | `AstraService`, `get_service`, `run_browser_message`, `register_browser_message_handler` | `web/backend/astra_service.py` |
 | `main`, `_parse_args` | `web/backend/run.py` |
+| `VoiceConfig`, `from_env` | `voice/backend/config.py` |
+| `build_status`, `format_status`, `VoiceStatus` | `voice/backend/deps.py` |
+| `AudioIO`, `ensure_wav16k`, `select_backend`, `AudioError` | `voice/backend/audio.py` |
+| `WhisperCppSTT`, `clean_transcript`, `WhisperError` | `voice/backend/stt.py` |
+| `PiperTTS`, `PiperError` | `voice/backend/tts.py` |
+| `VoiceAgent`, `AgentError` | `voice/backend/agent.py` |
+| `VoiceLoop` | `voice/backend/voice_loop.py` |
+| `main`, `build_whisper_cpp`, `ensure_whisper_model`, `install_piper`, `ensure_piper_voice` | `voice/backend/install.py` |
+| `main`, `_parse_args` | `voice/backend/run.py` |
