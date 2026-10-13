@@ -311,15 +311,18 @@ class AudioIO:
         max_seconds: Optional[float] = None,
         min_speech_seconds: float = 0.25,
         block_seconds: float = 0.03,
+        force_event: Optional[threading.Event] = None,
     ) -> Optional[Path]:
         """Block until one spoken utterance is captured, then return its WAV.
 
         Endpoint detection is a simple energy gate: ambient noise is measured,
         then the recorder waits for an above-noise burst and stops after a short
-        silence. Returns ``None`` when ``stop_event`` fires before any speech is
-        heard. Works on both audio backends; tunables default to the
-        :class:`VoiceConfig` values (``ASTRA_VOICE_SILENCE`` /
-        ``ASTRA_VOICE_MAX_UTTERANCE`` / ``ASTRA_VOICE_VAD_THRESHOLD``).
+        silence. Setting ``force_event`` commits the utterance early (e.g. the
+        user pressed Enter), even before a pause. Returns ``None`` when
+        ``stop_event`` fires before any speech is heard. Works on both audio
+        backends; tunables default to the :class:`VoiceConfig` values
+        (``ASTRA_VOICE_SILENCE`` / ``ASTRA_VOICE_MAX_UTTERANCE`` /
+        ``ASTRA_VOICE_VAD_THRESHOLD``).
         """
         if not self.supports_vad():
             raise AudioError(
@@ -337,12 +340,15 @@ class AudioIO:
 
         if self.backend == "sounddevice":
             return self._record_utterance_sounddevice(
-                stop_event, silence_seconds, max_seconds, min_speech_seconds, block_seconds, threshold)
+                stop_event, silence_seconds, max_seconds, min_speech_seconds, block_seconds,
+                threshold, force_event)
         return self._record_utterance_cli(
-            stop_event, silence_seconds, max_seconds, min_speech_seconds, block_seconds, threshold)
+            stop_event, silence_seconds, max_seconds, min_speech_seconds, block_seconds,
+            threshold, force_event)
 
     def _record_utterance_sounddevice(self, stop_event, silence_seconds, max_seconds,
-                                      min_speech_seconds, block_seconds, threshold) -> Optional[Path]:
+                                      min_speech_seconds, block_seconds, threshold,
+                                      force_event) -> Optional[Path]:
         sd = self._sd
         import numpy as np
 
@@ -360,6 +366,8 @@ class AudioIO:
         with sd.InputStream(samplerate=samplerate, channels=1, dtype="int16",
                             device=device_index) as stream:
             while not (stop_event and stop_event.is_set()):
+                if force_event is not None and force_event.is_set():
+                    break
                 data, _overflowed = stream.read(max(1, int(samplerate * block_seconds)))
                 rms = float(np.sqrt(np.mean(np.square(data.astype(np.float32))))) if len(data) else 0.0
 
@@ -377,7 +385,8 @@ class AudioIO:
                 if silence >= silence_seconds or speech_seconds >= max_seconds:
                     break
 
-        if not speaking or speech_seconds < min_speech_seconds:
+        forced = force_event is not None and force_event.is_set()
+        if not speaking or (speech_seconds < min_speech_seconds and not forced):
             return None
 
         raw = self.workdir / "utterance.wav"
@@ -385,7 +394,8 @@ class AudioIO:
         return ensure_wav16k(raw, self.workdir)
 
     def _record_utterance_cli(self, stop_event, silence_seconds, max_seconds,
-                              min_speech_seconds, block_seconds, threshold) -> Optional[Path]:
+                              min_speech_seconds, block_seconds, threshold,
+                              force_event) -> Optional[Path]:
         samplerate = 16000
         block_bytes = max(1, int(samplerate * block_seconds)) * 2  # int16 mono
 
@@ -399,6 +409,8 @@ class AudioIO:
             threshold = threshold or self._calibrate_noise_cli(proc.stdout, block_bytes)
 
             while not (stop_event and stop_event.is_set()):
+                if force_event is not None and force_event.is_set():
+                    break
                 chunk = proc.stdout.read(block_bytes)
                 if not chunk or len(chunk) < 2:
                     break
@@ -422,7 +434,8 @@ class AudioIO:
         finally:
             _stop_process(proc)
 
-        if not speaking or speech_seconds < min_speech_seconds:
+        forced = force_event is not None and force_event.is_set()
+        if not speaking or (speech_seconds < min_speech_seconds and not forced):
             return None
 
         raw = self.workdir / "utterance.wav"

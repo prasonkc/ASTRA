@@ -1357,10 +1357,11 @@ installs the **optional** audio extras (`sounddevice`, `numpy`) *best-effort*
 Arg-parsing and mode dispatch. Modes: `--status`, `--setup`, `--file PATH`,
 `--text TEXT`, `--say TEXT`, `--seconds N`, and the default **continuous
 listening** loop (`--push-to-talk` switches to press-Enter-to-talk; `--listen` is
-kept as a compatibility alias for the default). Flags: `--stt-only`, `--no-tts`,
-`--no-stream`, `--model`, `--models-dir`. It validates the pieces the chosen mode
-needs via `deps.build_status()` and exits with a clear message (and a non-zero
-code) when something is missing.
+kept as a compatibility alias for the default). Flags: `--no-enter` (ignore the
+Enter key in continuous mode), `--stt-only`, `--no-tts`, `--no-stream`, `--model`,
+`--models-dir`. It validates the pieces the chosen mode needs via
+`deps.build_status()` and exits with a clear message (and a non-zero code) when
+something is missing.
 
 ### 12.3 `voice/backend/config.py` — `VoiceConfig`
 
@@ -1381,7 +1382,8 @@ Two interchangeable backends: **sounddevice** (`sounddevice`+`numpy`) and **cli*
 stop_event?)` (fixed length or Enter-terminated), `record_utterance(...)`
 (energy-gate endpoint detection used by continuous listening on **both** backends;
 the CLI path streams raw 16 kHz PCM and computes RMS with the stdlib `array`
-module, so it needs no numpy), `play(path)`, and the module-level
+module, so it needs no numpy. A `force_event` commits the utterance early — this
+is how Enter-to-send works), `play(path)`, and the module-level
 `ensure_wav16k(path)` which converts any input to whisper's required 16 kHz mono
 16-bit PCM (no-op when already correct; uses `ffmpeg` or `sox`). `AudioError`
 signals a hard failure.
@@ -1413,9 +1415,11 @@ Orchestrates a turn: `handle_wav()` (transcribe → answer → speak) and
 `handle_text()`. Interaction modes: `run_continuous()` (the default — keeps
 listening, answers when the user stops talking, prints a `🎤 listening…`
 indicator on a TTY, and retries a microphone error a few times before giving up)
-and `run_interactive()` (push-to-talk; typing sends text; `q` quits). A failed
-utterance or TTS hiccup is reported and the loop continues. `_paint()` provides
-optional ANSI colour.
+and `run_interactive()` (push-to-talk; typing sends text; `q` quits). In
+continuous mode an Enter watcher thread (`_start_enter_watcher`) sets a
+`force_event` so pressing Enter sends early; `_NoEcho` (termios) hides the
+keypress while listening and is always restored. A failed utterance or TTS hiccup
+is reported and the loop continues. `_paint()` provides optional ANSI colour.
 
 ### 12.9 `voice/backend/deps.py`
 
@@ -1448,6 +1452,7 @@ network-failure tolerant.
 | `ASTRA_VOICE_VAD_THRESHOLD` | `0` (auto) | energy gate for endpoint detection |
 | `ASTRA_VOICE_SILENCE` | `0.8` | seconds of silence that ends an utterance |
 | `ASTRA_VOICE_MAX_UTTERANCE` | `15` | max seconds for one utterance |
+| `ASTRA_VOICE_ENTER_SEND` | on | press Enter to send early (continuous mode) |
 | `ASTRA_VOICE_KEEP_AUDIO` | off | keep temporary WAVs |
 
 ---
@@ -1837,8 +1842,9 @@ restart (`run.py --reload` for auto-reload).
 **Voice mode hears nothing / cuts off mid-sentence.** Continuous listening
 calibrates ambient noise and ends an utterance on a pause. In a noisy room or with
 a quiet mic, raise `ASTRA_VOICE_VAD_THRESHOLD` (e.g. `400`) or increase
-`ASTRA_VOICE_SILENCE`; `--push-to-talk` skips endpoint detection entirely.
-`--status` shows which audio backend was selected.
+`ASTRA_VOICE_SILENCE`; press **Enter** to send early, or use `--push-to-talk` to
+skip endpoint detection entirely. `--status` shows which audio backend was
+selected.
 
 ---
 
@@ -1889,6 +1895,7 @@ a quiet mic, raise `ASTRA_VOICE_VAD_THRESHOLD` (e.g. `400`) or increase
 | `ASTRA_VOICE_VAD_THRESHOLD` | `0` (auto) | energy gate for endpoint detection (voice) |
 | `ASTRA_VOICE_SILENCE` | `0.8` | seconds of silence that ends an utterance (voice) |
 | `ASTRA_VOICE_MAX_UTTERANCE` | `15` | max seconds for one utterance (voice) |
+| `ASTRA_VOICE_ENTER_SEND` | on | press Enter to send early (voice) |
 | `ASTRA_VOICE_KEEP_AUDIO` | off | keep temporary WAVs (voice) |
 
 Provider/model aliases: `local`→`ollama`, `gpt`→`openai`, `claude`→`anthropic`,

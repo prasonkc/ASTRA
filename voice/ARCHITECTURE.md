@@ -120,6 +120,8 @@ utterance, so nothing is captured while a reply is generated or spoken.
 
 ```
 calibrate noise ─▶ wait for speech ─▶ record until silence ─▶ WAV ─▶ turn ─▶ repeat
+                                         └── Enter ──────────────────┘
+                                             (commit early)
 ```
 
 This works on **both** audio backends. With sounddevice it reads the stream
@@ -127,6 +129,16 @@ directly; with the command-line recorder it streams raw 16 kHz mono PCM from
 `arecord`/`ffmpeg -f s16le -` and computes RMS with the stdlib `array` module —
 so hands-free mode needs no numpy. Tuning lives in `ASTRA_VOICE_SILENCE`,
 `ASTRA_VOICE_MAX_UTTERANCE` and `ASTRA_VOICE_VAD_THRESHOLD`.
+
+**Enter to send.** On an interactive terminal the loop also starts a small stdin
+watcher thread that sets a `force_event` when you press Enter; the recorder
+checks it each block and commits the utterance early, even mid-sentence. The
+event is cleared at the start of every recording, so an Enter pressed while a
+reply is being produced is discarded. Terminal echo is switched off during
+listening (best-effort `termios`) so the keypress does not smudge the
+`🎤 listening…` indicator, and it is always restored on exit. Disable the whole
+feature with `--no-enter` / `ASTRA_VOICE_ENTER_SEND=0` (also automatic when
+stdin is not a TTY).
 
 A recorder error is retried a few times before the loop gives up, so a transient
 "device busy" does not end the session.
@@ -207,7 +219,8 @@ explicit env var  →  project-local default (under voice/models)  →  PATH  �
 * **Audio backend** — `auto` prefers sounddevice, then CLI tools.
 * **Endpoint detection** — `ASTRA_VOICE_VAD_THRESHOLD` (0 = calibrate),
   `ASTRA_VOICE_SILENCE` (pause that ends an utterance) and
-  `ASTRA_VOICE_MAX_UTTERANCE` tune the continuous-listening gate.
+  `ASTRA_VOICE_MAX_UTTERANCE` tune the continuous-listening gate;
+  `ASTRA_VOICE_ENTER_SEND` toggles Enter-to-send (default on).
 
 `run.py --models-dir` sets `ASTRA_VOICE_MODELS_DIR` before resolution, so the
 whole config is recomputed consistently.

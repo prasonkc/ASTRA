@@ -19,6 +19,7 @@ Environment variables (all optional, prefix ``ASTRA_VOICE_``):
 - ``ASTRA_VOICE_VAD_THRESHOLD``— energy gate for endpoint detection (0 = auto)
 - ``ASTRA_VOICE_SILENCE``      — seconds of silence that ends an utterance (0.8)
 - ``ASTRA_VOICE_MAX_UTTERANCE``— max seconds for one utterance (15)
+- ``ASTRA_VOICE_ENTER_SEND``   — press Enter to send instead of waiting for a pause
 """
 from __future__ import annotations
 
@@ -107,6 +108,7 @@ class VoiceConfig:
     vad_threshold: int = 0          # 0 = calibrate automatically
     silence_seconds: float = 0.8    # pause that ends an utterance
     max_utterance_seconds: float = 15.0
+    enter_to_send: bool = True      # press Enter to commit early (interactive)
 
     @classmethod
     def from_env(cls) -> "VoiceConfig":
@@ -148,6 +150,7 @@ class VoiceConfig:
         cfg.vad_threshold = _env_int("VAD_THRESHOLD", 0)
         cfg.silence_seconds = _env_float("SILENCE", 0.8)
         cfg.max_utterance_seconds = _env_float("MAX_UTTERANCE", 15.0)
+        cfg.enter_to_send = _env_bool("ENTER_SEND", True)
         return cfg
 
     @staticmethod

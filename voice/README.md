@@ -58,7 +58,9 @@ the **optional** audio extras on a best-effort basis.
 
 The default mode **listens continuously**: the microphone stays open and the
 moment you stop talking the utterance is transcribed, answered and spoken. Just
-start talking — there is nothing to press. `--push-to-talk` switches back to
+start talking — there is nothing to press. You can also press **Enter** to send
+what you have said so far without waiting for the pause (turn this off with
+`--no-enter` or `ASTRA_VOICE_ENTER_SEND=0`). `--push-to-talk` switches back to
 press-Enter-to-talk, which is useful in noisy rooms or when you also want to type
 at the `voice>` prompt (`q` quits).
 
@@ -137,6 +139,7 @@ optional and prefixed `ASTRA_VOICE_`.
 | `ASTRA_VOICE_VAD_THRESHOLD` | `0` (auto) | energy gate for endpoint detection |
 | `ASTRA_VOICE_SILENCE` | `0.8` | seconds of silence that ends an utterance |
 | `ASTRA_VOICE_MAX_UTTERANCE` | `15` | max seconds captured for one utterance |
+| `ASTRA_VOICE_ENTER_SEND` | on | press Enter to send instead of waiting for a pause |
 | `ASTRA_VOICE_KEEP_AUDIO` | off | keep temporary WAVs for debugging |
 
 Model/provider selection for the **agent** is shared with the terminal and web
@@ -158,6 +161,7 @@ brain as everything else.
 | `--seconds N` | With `--push-to-talk`, record a fixed `N` seconds per turn. |
 | `--listen` | Continuous listening (the default; kept for compatibility). |
 | `--push-to-talk` | Press Enter to record and Enter again to send. |
+| `--no-enter` | In continuous mode, ignore Enter and only send on a pause. |
 | `--stt-only` | With `--file`/`--seconds`, transcribe without calling the agent. |
 | `--no-tts` | Do not speak replies. |
 | `--no-stream` | Print replies when complete instead of streaming. |
@@ -172,8 +176,8 @@ brain as everything else.
   history file). Run one frontend at a time for a single coherent session.
 * **Continuous listening is endpoint-gated.** The mic opens per utterance, so
   nothing is captured while a reply is generated or spoken. It detects the *pause*
-  after speech, not who is speaking: in a noisy room use `--push-to-talk` or tune
-  `ASTRA_VOICE_VAD_THRESHOLD`.
+  after speech, not who is speaking: press **Enter** to send early, use
+  `--push-to-talk`, or tune `ASTRA_VOICE_VAD_THRESHOLD` in a noisy room.
 * **First whisper call is slowest.** The model is loaded per invocation; larger
   models add noticeable latency.
 * **Piper is a subprocess.** Each reply is a fresh process; this keeps the code

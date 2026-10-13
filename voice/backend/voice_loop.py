@@ -37,6 +37,43 @@ def _paint(text: str, code: str) -> str:
     return f"\033[{code}m{text}\033[0m" if _supports_color() else text
 
 
+class _NoEcho:
+    """Context manager that turns off terminal echo while active (POSIX only).
+
+    Used during continuous listening so the Enter that commits an utterance does
+    not smudge the ``🎤 listening…`` indicator. Best-effort: if the terminal is
+    not a TTY or ``termios`` is unavailable (e.g. Windows), it does nothing.
+    """
+
+    def __enter__(self) -> "_NoEcho":
+        self._fd = None
+        self._saved = None
+        try:
+            import termios
+
+            fd = sys.stdin.fileno()
+            if not sys.stdin.isatty():
+                return self
+            saved = termios.tcgetattr(fd)
+            attrs = list(saved)
+            attrs[3] &= ~termios.ECHO  # keep ISIG so Ctrl-C still works
+            termios.tcsetattr(fd, termios.TCSADRAIN, attrs)
+            self._fd, self._saved = fd, saved
+        except Exception:
+            self._fd = None
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        if self._fd is not None:
+            try:
+                import termios
+
+                termios.tcsetattr(self._fd, termios.TCSADRAIN, self._saved)
+            except Exception:
+                pass
+        return False
+
+
 class VoiceLoop:
     """Orchestrates one voice conversation with ASTRA."""
 
@@ -51,6 +88,7 @@ class VoiceLoop:
         self.speak = speak and tts is not None
         self.stream = stream
         self.cooldown = cooldown
+        self.enter_to_send = bool(getattr(config, "enter_to_send", True))
         self._tty = _is_tty()
         self._out = out or print
 
@@ -178,6 +216,8 @@ class VoiceLoop:
 
         The microphone is opened per utterance, so nothing is captured while a
         reply is generated or spoken (no self-hearing). This is the default mode.
+        On an interactive terminal, pressing **Enter** sends whatever has been
+        said so far without waiting for the pause (see ``enter_to_send``).
         """
         if not self.audio.supports_vad():
             raise RuntimeError(
@@ -185,41 +225,67 @@ class VoiceLoop:
                 "command-line recorder such as arecord/ffmpeg). "
                 "Use --push-to-talk instead."
             )
+        stdin_tty = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+        manual = threading.Event() if (self.enter_to_send and self._tty and stdin_tty) else None
+        if manual is not None:
+            self._start_enter_watcher(manual)
         self.banner()
-        self._out(_paint("Listening continuously — just speak; pause to send. "
-                         "Ctrl-C to stop (--push-to-talk disables this).", "2"))
+        hint = (" — or press Enter to send." if manual is not None else ".")
+        self._out(_paint("Listening continuously — just speak, then pause" + hint +
+                         "  Ctrl-C to stop (--push-to-talk disables this).", "2"))
         failures = 0
         try:
-            while True:
-                self._show_listening()
-                try:
-                    wav = self.audio.record_utterance()
-                except AudioError as exc:
+            with _NoEcho():
+                while True:
+                    if manual is not None:
+                        manual.clear()
+                    self._show_listening(enter=manual is not None)
+                    try:
+                        wav = self.audio.record_utterance(force_event=manual)
+                    except AudioError as exc:
+                        self._clear_line()
+                        failures += 1
+                        self._out(_paint(f"! microphone error: {exc}", "31"))
+                        if failures >= 3:
+                            raise
+                        time.sleep(1.0)
+                        continue
+                    failures = 0
+                    sent = manual.is_set() if manual is not None else False
                     self._clear_line()
-                    failures += 1
-                    self._out(_paint(f"! microphone error: {exc}", "31"))
-                    if failures >= 3:
-                        raise
-                    time.sleep(1.0)
-                    continue
-                failures = 0
-                self._clear_line()
-                if wav is None:
-                    time.sleep(0.05)  # recorder exited with no audio: avoid a hot loop
-                    continue
-                self.handle_wav(wav)
-                if self.cooldown > 0:
-                    time.sleep(self.cooldown)  # let any speaker tail decay
+                    if wav is None:
+                        if sent:
+                            self._out(_paint("  (nothing captured yet — keep talking)", "2"))
+                        time.sleep(0.05)  # recorder exited with no audio: avoid a hot loop
+                        continue
+                    self.handle_wav(wav)
+                    if self.cooldown > 0:
+                        time.sleep(self.cooldown)  # let any speaker tail decay
         except KeyboardInterrupt:
             self._clear_line()
             self._out("")
             self._out(_paint("Stopped.", "2"))
 
     # ---- terminal helpers ---------------------------------------------------
-    def _show_listening(self) -> None:
+    def _show_listening(self, enter: bool = False) -> None:
         if self._tty:
-            self._out(_paint("🎤 listening…", "32"), end="", flush=True)
+            hint = "🎤 listening…  (Enter to send)" if enter else "🎤 listening…"
+            self._out(_paint(hint, "32"), end="", flush=True)
 
     def _clear_line(self) -> None:
         if self._tty:
             self._out("\r\033[K", end="", flush=True)
+
+    def _start_enter_watcher(self, event: threading.Event) -> None:
+        """Set ``event`` whenever the user presses Enter (interactive TTY only)."""
+        def watch() -> None:
+            try:
+                while True:
+                    line = sys.stdin.readline()
+                    if line == "":  # stdin closed / EOF
+                        return
+                    event.set()
+            except Exception:
+                return
+
+        threading.Thread(target=watch, name="voice-enter", daemon=True).start()

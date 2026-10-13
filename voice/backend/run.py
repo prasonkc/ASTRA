@@ -5,7 +5,9 @@ Runs the ASTRA voice wrapper: a local speech layer (whisper.cpp for
 speech-to-text, piper for text-to-speech) that lets you talk to the agent.
 
 The default mode listens **continuously**: the microphone stays open, and the
-moment you stop talking the utterance is transcribed, answered and spoken.
+moment you stop talking the utterance is transcribed, answered and spoken. You
+can also press **Enter** to send what you have said so far without waiting for
+the pause (disable with ``--no-enter``).
 
 Usage:
     ./voice/astra-voice                     # continuous listening (default)
@@ -69,6 +71,9 @@ def _parse_args() -> argparse.Namespace:
                         help="With --push-to-talk, record a fixed N seconds per turn.")
     parser.add_argument("--stt-only", action="store_true",
                         help="With --file/--seconds, only transcribe (no agent/reply).")
+    parser.add_argument("--no-enter", action="store_true",
+                        help="In continuous mode, ignore the Enter key and only send "
+                             "on a pause.")
 
     parser.add_argument("--no-tts", action="store_true",
                         help="Do not speak replies (print them only).")
@@ -84,7 +89,10 @@ def _parse_args() -> argparse.Namespace:
 def _config(args: argparse.Namespace) -> VoiceConfig:
     if args.models_dir:
         os.environ["ASTRA_VOICE_MODELS_DIR"] = str(Path(args.models_dir).expanduser())
-    return VoiceConfig.from_env()
+    config = VoiceConfig.from_env()
+    if getattr(args, "no_enter", False):
+        config.enter_to_send = False
+    return config
 
 
 def _build_stt(config: VoiceConfig) -> WhisperCppSTT:
