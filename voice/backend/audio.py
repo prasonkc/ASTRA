@@ -16,9 +16,11 @@ from __future__ import annotations
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import wave
+from array import array
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -142,6 +144,43 @@ def _write_wav(path: Path, data, samplerate: int) -> None:
         handle.writeframes(np.ascontiguousarray(data, dtype="int16").tobytes())
 
 
+def _write_wav_bytes(path: Path, pcm: bytes, samplerate: int) -> None:
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(samplerate)
+        handle.writeframes(pcm)
+
+
+def _rms(chunk: bytes) -> float:
+    """Root-mean-square of little-endian int16 PCM, using only the stdlib.
+
+    The command-line recorder path must not depend on numpy (that is the whole
+    point of the fallback), so endpoint detection decodes PCM with ``array``.
+    """
+    if len(chunk) < 2:
+        return 0.0
+    samples = array("h")
+    samples.frombytes(chunk[: len(chunk) - (len(chunk) % 2)])
+    if sys.byteorder == "big":
+        samples.byteswap()
+    if not samples:
+        return 0.0
+    total = 0
+    for value in samples:
+        total += value * value
+    return (total / len(samples)) ** 0.5
+
+
+def _threshold_from(samples) -> float:
+    """Speech threshold from a list of ambient RMS readings."""
+    if not samples:
+        return 250.0
+    ordered = sorted(samples)
+    noise = ordered[len(ordered) // 2]
+    return max(250.0, noise * 3.0)
+
+
 # --- the audio device ---------------------------------------------------------
 
 class AudioIO:
@@ -259,28 +298,51 @@ class AudioIO:
         finally:
             _stop_process(proc)
 
-    # ---- continuous listening (sounddevice only) ----------------------------
+    # ---- continuous listening -----------------------------------------------
     def supports_vad(self) -> bool:
-        return self.backend == "sounddevice"
+        """True when energy-gated endpoint detection is available."""
+        return self.backend != "none"
 
     def record_utterance(
         self,
         stop_event: Optional[threading.Event] = None,
         *,
-        silence_seconds: float = 0.8,
-        max_seconds: float = 15.0,
+        silence_seconds: Optional[float] = None,
+        max_seconds: Optional[float] = None,
         min_speech_seconds: float = 0.25,
         block_seconds: float = 0.03,
     ) -> Optional[Path]:
         """Block until one spoken utterance is captured, then return its WAV.
 
-        Uses a simple energy gate: ambient noise is measured first, then the
-        recorder waits for an above-noise burst and stops after a short silence.
-        Returns ``None`` when ``stop_event`` fires before any speech is heard.
+        Endpoint detection is a simple energy gate: ambient noise is measured,
+        then the recorder waits for an above-noise burst and stops after a short
+        silence. Returns ``None`` when ``stop_event`` fires before any speech is
+        heard. Works on both audio backends; tunables default to the
+        :class:`VoiceConfig` values (``ASTRA_VOICE_SILENCE`` /
+        ``ASTRA_VOICE_MAX_UTTERANCE`` / ``ASTRA_VOICE_VAD_THRESHOLD``).
         """
         if not self.supports_vad():
-            raise AudioError("Continuous listening needs the sounddevice backend.")
+            raise AudioError(
+                "Continuous listening needs an audio backend (sounddevice, or a "
+                "command-line recorder such as arecord/ffmpeg)."
+            )
 
+        silence_seconds = float(
+            getattr(self.config, "silence_seconds", 0.8) if silence_seconds is None else silence_seconds
+        )
+        max_seconds = float(
+            getattr(self.config, "max_utterance_seconds", 15.0) if max_seconds is None else max_seconds
+        )
+        threshold = float(getattr(self.config, "vad_threshold", 0) or 0)
+
+        if self.backend == "sounddevice":
+            return self._record_utterance_sounddevice(
+                stop_event, silence_seconds, max_seconds, min_speech_seconds, block_seconds, threshold)
+        return self._record_utterance_cli(
+            stop_event, silence_seconds, max_seconds, min_speech_seconds, block_seconds, threshold)
+
+    def _record_utterance_sounddevice(self, stop_event, silence_seconds, max_seconds,
+                                      min_speech_seconds, block_seconds, threshold) -> Optional[Path]:
         sd = self._sd
         import numpy as np
 
@@ -288,7 +350,7 @@ class AudioIO:
         device_index = int(device) if (device and str(device).isdigit()) else device
         samplerate = 16000
 
-        threshold = self._calibrate_noise(device_index, samplerate, block_seconds)
+        threshold = threshold or self._calibrate_noise(device_index, samplerate, block_seconds)
 
         frames = []
         speaking = False
@@ -322,6 +384,64 @@ class AudioIO:
         _write_wav(raw, np.concatenate(frames, axis=0), samplerate)
         return ensure_wav16k(raw, self.workdir)
 
+    def _record_utterance_cli(self, stop_event, silence_seconds, max_seconds,
+                              min_speech_seconds, block_seconds, threshold) -> Optional[Path]:
+        samplerate = 16000
+        block_bytes = max(1, int(samplerate * block_seconds)) * 2  # int16 mono
+
+        proc = subprocess.Popen(self._capture_raw_cmd(),
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        frames = []
+        speaking = False
+        speech_seconds = 0.0
+        silence = 0.0
+        try:
+            threshold = threshold or self._calibrate_noise_cli(proc.stdout, block_bytes)
+
+            while not (stop_event and stop_event.is_set()):
+                chunk = proc.stdout.read(block_bytes)
+                if not chunk or len(chunk) < 2:
+                    break
+                rms = _rms(chunk)
+
+                if not speaking:
+                    if rms > threshold:
+                        speaking = True
+                        speech_seconds = block_seconds
+                        silence = 0.0
+                        frames = [chunk]
+                    continue
+
+                frames.append(chunk)
+                speech_seconds += block_seconds
+                silence = silence + block_seconds if rms < threshold else 0.0
+                if silence >= silence_seconds or speech_seconds >= max_seconds:
+                    break
+        except (OSError, ValueError) as exc:
+            raise AudioError(f"Microphone capture failed: {exc}") from exc
+        finally:
+            _stop_process(proc)
+
+        if not speaking or speech_seconds < min_speech_seconds:
+            return None
+
+        raw = self.workdir / "utterance.wav"
+        _write_wav_bytes(raw, b"".join(frames), samplerate)
+        return ensure_wav16k(raw, self.workdir)
+
+    def _capture_raw_cmd(self):
+        """Raw 16 kHz mono int16 PCM on stdout for the active CLI recorder."""
+        recorder = find_recorder()
+        if recorder == "arecord":
+            return ["arecord", "-q", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw"]
+        if recorder == "ffmpeg":
+            return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "alsa",
+                    "-i", self.config.input_device or "default",
+                    "-ar", "16000", "-ac", "1", "-f", "s16le", "-"]
+        if recorder == "rec":
+            return ["rec", "-q", "-r", "16000", "-c", "1", "-b", "16", "-t", "raw", "-"]
+        raise AudioError("No command-line recorder (arecord/ffmpeg/rec) found.")
+
     def _calibrate_noise(self, device, samplerate: int, block_seconds: float) -> float:
         """Measure ambient RMS for a moment and return a speech threshold."""
         import numpy as np
@@ -333,8 +453,17 @@ class AudioIO:
                 data, _ = stream.read(max(1, int(samplerate * block_seconds)))
                 if len(data):
                     samples.append(float(np.sqrt(np.mean(np.square(data.astype(np.float32))))))
-        noise = float(np.median(samples)) if samples else 0.0
-        return max(250.0, noise * 3.0)
+        return _threshold_from(samples)
+
+    def _calibrate_noise_cli(self, stream, block_bytes: int, blocks: int = 20) -> float:
+        """Ambient-noise calibration for the raw-pipe CLI recorder."""
+        samples = []
+        for _ in range(blocks):  # ~0.6 s
+            chunk = stream.read(block_bytes)
+            if not chunk or len(chunk) < 2:
+                break
+            samples.append(_rms(chunk))
+        return _threshold_from(samples)
 
     # ---- playback -----------------------------------------------------------
     def play(self, path: Path) -> None:

@@ -2,12 +2,14 @@
 """astra-voice entrypoint.
 
 Runs the ASTRA voice wrapper: a local speech layer (whisper.cpp for
+speech-to-text, piper for text-to-speech) that lets you talk to the agent.
 
-    speech-to-text, piper for text-to-speech) that lets you talk to the agent.
+The default mode listens **continuously**: the microphone stays open, and the
+moment you stop talking the utterance is transcribed, answered and spoken.
 
 Usage:
-    ./voice/astra-voice                     # push-to-talk conversation
-    ./voice/astra-voice --listen            # hands-free (needs sounddevice)
+    ./voice/astra-voice                     # continuous listening (default)
+    ./voice/astra-voice --push-to-talk      # press Enter to talk, Enter to stop
     ./voice/astra-voice --file clip.wav     # process one audio file
     ./voice/astra-voice --text "hello"      # send text (no microphone)
     ./voice/astra-voice --say "hello"       # speak text, don't talk to the agent
@@ -57,10 +59,14 @@ def _parse_args() -> argparse.Namespace:
                         help="Send a text message to the agent (no microphone), then exit.")
     parser.add_argument("--say", metavar="TEXT",
                         help="Speak TEXT with piper only (does not call the agent), then exit.")
-    parser.add_argument("--seconds", type=float, default=None, metavar="N",
-                        help="Record a fixed N seconds instead of push-to-talk.")
     parser.add_argument("--listen", action="store_true",
-                        help="Hands-free continuous listening (needs sounddevice).")
+                        help="Continuous listening (this is the default; kept for "
+                             "compatibility).")
+    parser.add_argument("--push-to-talk", action="store_true",
+                        help="Press Enter to record and Enter again to send, instead "
+                             "of continuous listening.")
+    parser.add_argument("--seconds", type=float, default=None, metavar="N",
+                        help="With --push-to-talk, record a fixed N seconds per turn.")
     parser.add_argument("--stt-only", action="store_true",
                         help="With --file/--seconds, only transcribe (no agent/reply).")
 
@@ -160,10 +166,12 @@ def main() -> int:
         if args.file:
             loop.handle_wav(Path(args.file))
             return 0
-        if args.listen:
-            loop.run_listen()
+        # Interactive-by-request: push-to-talk, or a fixed capture window.
+        if args.push_to_talk or args.seconds is not None:
+            loop.run_interactive(seconds=args.seconds)
             return 0
-        loop.run_interactive(seconds=args.seconds)
+        # Default: keep listening and answer when the user pauses.
+        loop.run_continuous()
         return 0
     except FileNotFoundError as exc:
         print(_paint(f"! {exc}", "31"))

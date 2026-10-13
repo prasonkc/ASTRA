@@ -45,8 +45,8 @@ tells you exactly what to install.
 
 ```bash
 ./voice/astra-voice --setup          # one-time: fetch models + build whisper.cpp
-./voice/astra-voice                  # push-to-talk conversation
-./voice/astra-voice --listen         # hands-free (needs the sounddevice extras)
+./voice/astra-voice                  # continuous listening (default)
+./voice/astra-voice --push-to-talk   # press Enter to talk, Enter again to send
 ./voice/astra-voice --file clip.wav  # process one audio file, then exit
 ./voice/astra-voice --text "hello"   # send text (no microphone)
 ./voice/astra-voice --say "hello"    # speak text only (no agent)
@@ -56,9 +56,11 @@ tells you exactly what to install.
 The launcher reuses `core/.venv`, installing the core dependencies if missing and
 the **optional** audio extras on a best-effort basis.
 
-In the default **push-to-talk** mode you press Enter to start recording and Enter
-again to stop. You can also type a message directly at the `voice>` prompt, and
-`q` quits.
+The default mode **listens continuously**: the microphone stays open and the
+moment you stop talking the utterance is transcribed, answered and spoken. Just
+start talking — there is nothing to press. `--push-to-talk` switches back to
+press-Enter-to-talk, which is useful in noisy rooms or when you also want to type
+at the `voice>` prompt (`q` quits).
 
 ## Setup & prerequisites
 
@@ -107,11 +109,13 @@ The voice layer records and plays through either:
 
 * **sounddevice + numpy** — `pip install -r voice/requirements.txt`. On Linux you
   also need PortAudio: `sudo apt-get install libportaudio2`. This is the cleanest
-  backend and is **required for `--listen`** (hands-free).
+  backend and is used automatically when present.
 * **command-line tools** — `arecord`/`aplay` (ALSA) or `ffmpeg`/`ffplay`. Nothing
-  to install in Python. Push-to-talk and `--seconds` work with these.
+  to install in Python. Continuous listening works here too: raw PCM is streamed
+  from the recorder and gated in pure Python (no numpy needed).
 
-`--status` reports which backend was selected.
+Either backend supports continuous listening; `--status` reports which one was
+selected.
 
 ## Configuration
 
@@ -130,6 +134,9 @@ optional and prefixed `ASTRA_VOICE_`.
 | `ASTRA_VOICE_INPUT_DEVICE` | system default | mic device (name or index) |
 | `ASTRA_VOICE_OUTPUT_DEVICE` | system default | speaker device (name or index) |
 | `ASTRA_VOICE_AUDIO_BACKEND` | `auto` | `auto`, `sounddevice` or `cli` |
+| `ASTRA_VOICE_VAD_THRESHOLD` | `0` (auto) | energy gate for endpoint detection |
+| `ASTRA_VOICE_SILENCE` | `0.8` | seconds of silence that ends an utterance |
+| `ASTRA_VOICE_MAX_UTTERANCE` | `15` | max seconds captured for one utterance |
 | `ASTRA_VOICE_KEEP_AUDIO` | off | keep temporary WAVs for debugging |
 
 Model/provider selection for the **agent** is shared with the terminal and web
@@ -148,8 +155,9 @@ brain as everything else.
 | `--file PATH` | Transcribe and answer one WAV file, then exit. |
 | `--text TEXT` | Send a text message to the agent (no mic), then exit. |
 | `--say TEXT` | Speak `TEXT` with piper only, then exit. |
-| `--seconds N` | Record a fixed `N` seconds instead of push-to-talk. |
-| `--listen` | Hands-free continuous listening (needs sounddevice). |
+| `--seconds N` | With `--push-to-talk`, record a fixed `N` seconds per turn. |
+| `--listen` | Continuous listening (the default; kept for compatibility). |
+| `--push-to-talk` | Press Enter to record and Enter again to send. |
 | `--stt-only` | With `--file`/`--seconds`, transcribe without calling the agent. |
 | `--no-tts` | Do not speak replies. |
 | `--no-stream` | Print replies when complete instead of streaming. |
@@ -162,8 +170,10 @@ brain as everything else.
   if you also run the terminal or web app at the same time, they are separate
   processes with separate in-memory sessions (though they share the same SQLite
   history file). Run one frontend at a time for a single coherent session.
-* **`--listen` needs sounddevice.** The command-line backend has no reliable
-  silence detection, so hands-free mode requires the Python extras.
+* **Continuous listening is endpoint-gated.** The mic opens per utterance, so
+  nothing is captured while a reply is generated or spoken. It detects the *pause*
+  after speech, not who is speaking: in a noisy room use `--push-to-talk` or tune
+  `ASTRA_VOICE_VAD_THRESHOLD`.
 * **First whisper call is slowest.** The model is loaded per invocation; larger
   models add noticeable latency.
 * **Piper is a subprocess.** Each reply is a fresh process; this keeps the code

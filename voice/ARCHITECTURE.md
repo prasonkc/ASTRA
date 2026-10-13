@@ -74,11 +74,11 @@ same core the terminal and web apps embed.
 | `backend/run.py` | CLI entrypoint: parse args, pick a mode, build components, own the lifecycle (close agent, clean temp audio). |
 | `backend/config.py` | `VoiceConfig` — resolve binaries, models, language, devices and backend from env + defaults. |
 | `backend/deps.py` | `build_status()` / `format_status()` — is the layer ready, and what is missing. |
-| `backend/audio.py` | `AudioIO` — record (fixed / push-to-talk / VAD), play, and `ensure_wav16k` conversion. |
+| `backend/audio.py` | `AudioIO` — record (fixed / push-to-talk), endpoint-gated `record_utterance`, play, and `ensure_wav16k` conversion. |
 | `backend/stt.py` | `WhisperCppSTT` — invoke whisper.cpp, parse and clean the transcript. |
 | `backend/tts.py` | `PiperTTS` — feed text to piper, return a WAV path. |
 | `backend/agent.py` | `VoiceAgent` — facade over `AstraService`; streams a turn, collects the reply. |
-| `backend/voice_loop.py` | `VoiceLoop` — the conversation orchestration and its interaction modes. |
+| `backend/voice_loop.py` | `VoiceLoop` — the conversation orchestration: continuous listening (default), push-to-talk, and one-shot modes. |
 | `backend/install.py` | `--setup`: build whisper.cpp, download models, fetch piper. |
 | `astra-voice` | Shell launcher: venv, dependency install, exec `run.py`. |
 
@@ -94,9 +94,10 @@ A single turn flows through five stages. Every stage is independently optional.
  (VAD/PTT)      WAV               transcript         (streamed)         WAV
 ```
 
-1. **Capture** — `AudioIO.record()` produces a WAV. It is converted to 16 kHz
-   mono 16-bit PCM (`ensure_wav16k`) because that is the only format whisper.cpp
-   accepts. Conversion is a no-op when the recording already matches.
+1. **Capture** — `AudioIO.record()` (fixed window / push-to-talk) or
+   `AudioIO.record_utterance()` (endpoint-gated) produces a WAV. It is converted
+   to 16 kHz mono 16-bit PCM (`ensure_wav16k`) because that is the only format
+   whisper.cpp accepts. Conversion is a no-op when the recording already matches.
 2. **Transcribe** — `WhisperCppSTT` runs `whisper-cli -m MODEL -f WAV -otxt -of B
    -nt -l LANG`. It prefers the `.txt` sidecar and falls back to stdout, then
    strips timestamps and non-speech markers (`[BLANK_AUDIO]`, `[Music]`, …).
@@ -110,7 +111,27 @@ A single turn flows through five stages. Every stage is independently optional.
 
 ## 4. Data flows
 
-### 4a. Push-to-talk (default)
+### 4a. Continuous listening (default)
+
+`AudioIO.record_utterance()` calibrates ambient noise, then energy-gates: it
+waits for an above-noise burst, records until a short silence, and returns one
+WAV per utterance. The loop calls it repeatedly; the microphone is opened per
+utterance, so nothing is captured while a reply is generated or spoken.
+
+```
+calibrate noise ─▶ wait for speech ─▶ record until silence ─▶ WAV ─▶ turn ─▶ repeat
+```
+
+This works on **both** audio backends. With sounddevice it reads the stream
+directly; with the command-line recorder it streams raw 16 kHz mono PCM from
+`arecord`/`ffmpeg -f s16le -` and computes RMS with the stdlib `array` module —
+so hands-free mode needs no numpy. Tuning lives in `ASTRA_VOICE_SILENCE`,
+`ASTRA_VOICE_MAX_UTTERANCE` and `ASTRA_VOICE_VAD_THRESHOLD`.
+
+A recorder error is retried a few times before the loop gives up, so a transient
+"device busy" does not end the session.
+
+### 4b. Push-to-talk (`--push-to-talk`)
 
 ```
 voice> ⏎                     ┌───────────────┐
@@ -127,20 +148,8 @@ STT → agent (streamed) → TTS → play
 Recording runs on a **daemon thread** that blocks on `stop_event`; the main
 thread waits for the user's Enter and then sets it. This works for both audio
 backends (the sounddevice stream stops cleanly; a spawned `arecord`/`ffmpeg`
-receives `SIGINT` to finalise its file).
-
-### 4b. Hands-free listening (`--listen`)
-
-`AudioIO.record_utterance()` calibrates ambient noise, then energy-gates: it
-waits for an above-noise burst, records until a short silence, and returns one
-WAV per utterance. The loop calls it repeatedly until Ctrl-C.
-
-```
-calibrate noise ─▶ wait for speech ─▶ record until silence ─▶ WAV ─▶ turn ─▶ repeat
-```
-
-This mode requires the **sounddevice** backend; the command-line backend has no
-reliable silence detection, and `--listen` fails fast with a clear message.
+receives `SIGINT` to finalise its file). Used when endpoint detection is
+unreliable (noisy rooms) or when you want to type at the prompt.
 
 ### 4c. File / text modes
 
@@ -196,6 +205,9 @@ explicit env var  →  project-local default (under voice/models)  →  PATH  �
 * **Models** — explicit env, else `rglob("ggml-*.bin")` (preferring `.en`) and
   `rglob("*.onnx")` under the models directory.
 * **Audio backend** — `auto` prefers sounddevice, then CLI tools.
+* **Endpoint detection** — `ASTRA_VOICE_VAD_THRESHOLD` (0 = calibrate),
+  `ASTRA_VOICE_SILENCE` (pause that ends an utterance) and
+  `ASTRA_VOICE_MAX_UTTERANCE` tune the continuous-listening gate.
 
 `run.py --models-dir` sets `ASTRA_VOICE_MODELS_DIR` before resolution, so the
 whole config is recomputed consistently.
@@ -234,11 +246,12 @@ it.
 
 ## 9. Limitations
 
-* One turn at a time; no barge-in while the agent or piper is speaking.
+* One turn at a time; no barge-in while the agent or piper is speaking (the mic
+  is closed during a reply, which also prevents self-hearing).
 * whisper.cpp is invoked per utterance, so there is model-load latency each turn.
-* `--listen` is limited to the sounddevice backend.
-* Energy-gate VAD is simple: noisy environments or quiet speakers may need
-  `ASTRA_VOICE_INPUT_DEVICE` tuning.
+* Energy-gate VAD is simple and detects *pauses*, not speakers: noisy
+  environments or quiet speakers may need `ASTRA_VOICE_VAD_THRESHOLD` or
+  `ASTRA_VOICE_INPUT_DEVICE` tuning (or `--push-to-talk`).
 * Piper voices are discovered by filename; multiple voices require
   `ASTRA_VOICE_TTS_MODEL` to disambiguate.
 
@@ -249,7 +262,7 @@ it.
 * **Streaming STT** — whisper.cpp server mode to avoid per-utterance model loads.
 * **HTTP surface** — expose `stt.py`/`tts.py` behind small endpoints so the web
   UI and the Firefox extension can add a mic button.
-* **Wake word** — a lightweight keyword spotter in front of `--listen`.
+* **Wake word** — a lightweight keyword spotter in front of continuous listening.
 * **Voice selection** — a `--voice` flag mapping friendly names to pyproject
   `speaker` ids for multi-speaker piper models.
 * **Interrupt** — allow the user to start speaking while a reply plays.

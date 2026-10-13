@@ -1,8 +1,7 @@
 # ASTRA voice wrapper — optional Python extras.
 #
 # The voice layer works without these by shelling out to arecord/aplay/ffmpeg,
-# but sounddevice+numpy give it a cleaner, cross-platform audio backend and are
-# required for hands-free `--listen` mode.
+# but sounddevice+numpy give it a cleaner, cross-platform audio backend.
 #
 #   pip install -r voice/requirements.txt
 #

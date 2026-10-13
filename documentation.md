@@ -285,9 +285,9 @@ Python dependencies:
 - `requirements.txt` (core): `ollama`, `requests`, `beautifulsoup4`, `lxml`,
   `rich`, `python-docx`, `python-pptx`, `openpyxl`.
 - `web/requirements.txt` (web backend): `fastapi`, `uvicorn`.
-- `voice/requirements.txt` (voice, **optional**): `sounddevice`, `numpy` — only
-  for the cleaner audio backend and `--listen`; the voice layer otherwise shells
-  out to `arecord`/`aplay`/`ffmpeg`.
+- `voice/requirements.txt` (voice, **optional**): `sounddevice`, `numpy` — the
+  cleaner audio backend; the voice layer otherwise shells out to
+  `arecord`/`aplay`/`ffmpeg`. Continuous listening works on either backend.
 
 Two optional features require packages that are **not** declared in
 `requirements.txt` and must be installed manually:
@@ -340,8 +340,8 @@ speech-to-text, piper for text-to-speech) and runs the same core in a voice loop
 
 ```bash
 ./voice/astra-voice --setup          # one-time: fetch models, build whisper.cpp
-./voice/astra-voice                  # push-to-talk conversation
-./voice/astra-voice --listen         # hands-free (needs sounddevice extras)
+./voice/astra-voice                  # continuous listening (default)
+./voice/astra-voice --push-to-talk   # press Enter to talk, Enter again to send
 ./voice/astra-voice --status         # show readiness / what is missing
 ```
 
@@ -1340,6 +1340,10 @@ no new agent logic. Everything runs on-device. Full design in
 microphone ─▶ whisper.cpp (STT) ─▶ ASTRA agent ─▶ piper (TTS) ─▶ speaker
 ```
 
+The default mode listens **continuously**: the microphone is opened per utterance,
+an energy gate detects when you stop speaking, and that utterance is transcribed,
+answered and spoken. `--push-to-talk` restores press-Enter-to-talk.
+
 ### 12.1 Launcher — `voice/astra-voice`
 
 A bash launcher mirroring `web/astra-web`: it reuses
@@ -1351,11 +1355,12 @@ installs the **optional** audio extras (`sounddevice`, `numpy`) *best-effort*
 ### 12.2 `voice/backend/run.py`
 
 Arg-parsing and mode dispatch. Modes: `--status`, `--setup`, `--file PATH`,
-`--text TEXT`, `--say TEXT`, `--seconds N`, `--listen`, and the default
-push-to-talk loop. Flags: `--stt-only`, `--no-tts`, `--no-stream`, `--model`,
-`--models-dir`. It validates the pieces the chosen mode needs via
-`deps.build_status()` and exits with a clear message (and a non-zero code) when
-something is missing.
+`--text TEXT`, `--say TEXT`, `--seconds N`, and the default **continuous
+listening** loop (`--push-to-talk` switches to press-Enter-to-talk; `--listen` is
+kept as a compatibility alias for the default). Flags: `--stt-only`, `--no-tts`,
+`--no-stream`, `--model`, `--models-dir`. It validates the pieces the chosen mode
+needs via `deps.build_status()` and exits with a clear message (and a non-zero
+code) when something is missing.
 
 ### 12.3 `voice/backend/config.py` — `VoiceConfig`
 
@@ -1370,14 +1375,16 @@ defined here.
 
 ### 12.4 `voice/backend/audio.py` — `AudioIO`
 
-Two interchangeable backends: **sounddevice** (`sounddevice`+`numpy`, supports
-clean stop and VAD) and **cli** (`arecord`/`ffmpeg`/`rec` for capture,
-`aplay`/`ffplay`/`play` for playback). `select_backend("auto")` prefers
-sounddevice. Key methods: `record(seconds?, stop_event?)` (fixed length or
-Enter-terminated), `record_utterance(...)` (energy-gate VAD for `--listen`),
-`play(path)`, and the module-level `ensure_wav16k(path)` which converts any input
-to whisper's required 16 kHz mono 16-bit PCM (no-op when already correct; uses
-`ffmpeg` or `sox`). `AudioError` signals a hard failure.
+Two interchangeable backends: **sounddevice** (`sounddevice`+`numpy`) and **cli**
+(`arecord`/`ffmpeg`/`rec` for capture, `aplay`/`ffplay`/`play` for playback).
+`select_backend("auto")` prefers sounddevice. Key methods: `record(seconds?,
+stop_event?)` (fixed length or Enter-terminated), `record_utterance(...)`
+(energy-gate endpoint detection used by continuous listening on **both** backends;
+the CLI path streams raw 16 kHz PCM and computes RMS with the stdlib `array`
+module, so it needs no numpy), `play(path)`, and the module-level
+`ensure_wav16k(path)` which converts any input to whisper's required 16 kHz mono
+16-bit PCM (no-op when already correct; uses `ffmpeg` or `sox`). `AudioError`
+signals a hard failure.
 
 ### 12.5 `voice/backend/stt.py` — `WhisperCppSTT`
 
@@ -1403,8 +1410,10 @@ live printing. `AgentError` wraps initialisation failures.
 ### 12.8 `voice/backend/voice_loop.py` — `VoiceLoop`
 
 Orchestrates a turn: `handle_wav()` (transcribe → answer → speak) and
-`handle_text()`. Interaction modes: `run_interactive()` (push-to-talk; typing
-sends text; `q` quits) and `run_listen()` (hands-free, sounddevice only). A failed
+`handle_text()`. Interaction modes: `run_continuous()` (the default — keeps
+listening, answers when the user stops talking, prints a `🎤 listening…`
+indicator on a TTY, and retries a microphone error a few times before giving up)
+and `run_interactive()` (push-to-talk; typing sends text; `q` quits). A failed
 utterance or TTS hiccup is reported and the loop continues. `_paint()` provides
 optional ANSI colour.
 
@@ -1436,6 +1445,9 @@ network-failure tolerant.
 | `ASTRA_VOICE_THREADS` | whisper default | whisper thread count |
 | `ASTRA_VOICE_INPUT_DEVICE` / `ASTRA_VOICE_OUTPUT_DEVICE` | system default | audio devices |
 | `ASTRA_VOICE_AUDIO_BACKEND` | `auto` | `auto`/`sounddevice`/`cli` |
+| `ASTRA_VOICE_VAD_THRESHOLD` | `0` (auto) | energy gate for endpoint detection |
+| `ASTRA_VOICE_SILENCE` | `0.8` | seconds of silence that ends an utterance |
+| `ASTRA_VOICE_MAX_UTTERANCE` | `15` | max seconds for one utterance |
 | `ASTRA_VOICE_KEEP_AUDIO` | off | keep temporary WAVs |
 
 ---
@@ -1822,6 +1834,12 @@ outside `core/`.
 **Frontend change isn't visible.** Hard-refresh; backend changes require a
 restart (`run.py --reload` for auto-reload).
 
+**Voice mode hears nothing / cuts off mid-sentence.** Continuous listening
+calibrates ambient noise and ends an utterance on a pause. In a noisy room or with
+a quiet mic, raise `ASTRA_VOICE_VAD_THRESHOLD` (e.g. `400`) or increase
+`ASTRA_VOICE_SILENCE`; `--push-to-talk` skips endpoint detection entirely.
+`--status` shows which audio backend was selected.
+
 ---
 
 ## 21. Glossary
@@ -1868,6 +1886,9 @@ restart (`run.py --reload` for auto-reload).
 | `ASTRA_VOICE_THREADS` | whisper default | whisper thread count (voice) |
 | `ASTRA_VOICE_INPUT_DEVICE` / `ASTRA_VOICE_OUTPUT_DEVICE` | system default | audio devices (voice) |
 | `ASTRA_VOICE_AUDIO_BACKEND` | `auto` | `auto`/`sounddevice`/`cli` (voice) |
+| `ASTRA_VOICE_VAD_THRESHOLD` | `0` (auto) | energy gate for endpoint detection (voice) |
+| `ASTRA_VOICE_SILENCE` | `0.8` | seconds of silence that ends an utterance (voice) |
+| `ASTRA_VOICE_MAX_UTTERANCE` | `15` | max seconds for one utterance (voice) |
 | `ASTRA_VOICE_KEEP_AUDIO` | off | keep temporary WAVs (voice) |
 
 Provider/model aliases: `local`→`ollama`, `gpt`→`openai`, `claude`→`anthropic`,
@@ -1964,6 +1985,6 @@ A quick map of the most important symbols to their files.
 | `WhisperCppSTT`, `clean_transcript`, `WhisperError` | `voice/backend/stt.py` |
 | `PiperTTS`, `PiperError` | `voice/backend/tts.py` |
 | `VoiceAgent`, `AgentError` | `voice/backend/agent.py` |
-| `VoiceLoop` | `voice/backend/voice_loop.py` |
+| `VoiceLoop` (`run_continuous`, `run_interactive`) | `voice/backend/voice_loop.py` |
 | `main`, `build_whisper_cpp`, `ensure_whisper_model`, `install_piper`, `ensure_piper_voice` | `voice/backend/install.py` |
 | `main`, `_parse_args` | `voice/backend/run.py` |

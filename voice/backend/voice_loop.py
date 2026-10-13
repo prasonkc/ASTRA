@@ -4,6 +4,11 @@ Ties the speech layer together:
 
     microphone ─▶ whisper.cpp (STT) ─▶ ASTRA agent ─▶ piper (TTS) ─▶ speaker
 
+The default mode is **continuous listening**: the microphone stays open, an
+energy gate detects when you start and (more importantly) stop speaking, and the
+utterance is processed the moment you pause. Push-to-talk remains available for
+noisy environments or when endpoint detection is unreliable.
+
 The loop is deliberately UI-light: it prints the transcript and the streamed
 reply, and speaks the reply when text-to-speech is available. It never raises for
 a single failed utterance — a bad recording or a TTS hiccup is reported and the
@@ -13,11 +18,18 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
+from .audio import AudioError
+
 
 def _supports_color() -> bool:
+    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
+
+def _is_tty() -> bool:
     return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 
 
@@ -29,7 +41,7 @@ class VoiceLoop:
     """Orchestrates one voice conversation with ASTRA."""
 
     def __init__(self, config, agent, stt, tts, audio, *,
-                 speak: bool = True, stream: bool = True,
+                 speak: bool = True, stream: bool = True, cooldown: float = 0.4,
                  out: Optional[Callable[..., None]] = None):
         self.config = config
         self.agent = agent
@@ -38,6 +50,8 @@ class VoiceLoop:
         self.audio = audio
         self.speak = speak and tts is not None
         self.stream = stream
+        self.cooldown = cooldown
+        self._tty = _is_tty()
         self._out = out or print
 
     # ---- presentation -------------------------------------------------------
@@ -159,20 +173,53 @@ class VoiceLoop:
                 continue
             self.listen_once(seconds=seconds)
 
-    def run_listen(self) -> None:
-        """Hands-free loop: wait for speech, answer, repeat until Ctrl-C."""
+    def run_continuous(self) -> None:
+        """Hands-free loop: keep listening; answer when the user stops talking.
+
+        The microphone is opened per utterance, so nothing is captured while a
+        reply is generated or spoken (no self-hearing). This is the default mode.
+        """
         if not self.audio.supports_vad():
             raise RuntimeError(
-                "Continuous listening needs the sounddevice backend "
-                "(install voice/requirements.txt), or use push-to-talk instead."
+                "Continuous listening needs an audio backend (sounddevice, or a "
+                "command-line recorder such as arecord/ffmpeg). "
+                "Use --push-to-talk instead."
             )
         self.banner()
-        self._out(_paint("Listening… speak any time (Ctrl-C to stop).", "2"))
+        self._out(_paint("Listening continuously — just speak; pause to send. "
+                         "Ctrl-C to stop (--push-to-talk disables this).", "2"))
+        failures = 0
         try:
             while True:
-                wav = self.audio.record_utterance()
-                if wav is not None:
-                    self.handle_wav(wav)
+                self._show_listening()
+                try:
+                    wav = self.audio.record_utterance()
+                except AudioError as exc:
+                    self._clear_line()
+                    failures += 1
+                    self._out(_paint(f"! microphone error: {exc}", "31"))
+                    if failures >= 3:
+                        raise
+                    time.sleep(1.0)
+                    continue
+                failures = 0
+                self._clear_line()
+                if wav is None:
+                    time.sleep(0.05)  # recorder exited with no audio: avoid a hot loop
+                    continue
+                self.handle_wav(wav)
+                if self.cooldown > 0:
+                    time.sleep(self.cooldown)  # let any speaker tail decay
         except KeyboardInterrupt:
+            self._clear_line()
             self._out("")
             self._out(_paint("Stopped.", "2"))
+
+    # ---- terminal helpers ---------------------------------------------------
+    def _show_listening(self) -> None:
+        if self._tty:
+            self._out(_paint("🎤 listening…", "32"), end="", flush=True)
+
+    def _clear_line(self) -> None:
+        if self._tty:
+            self._out("\r\033[K", end="", flush=True)

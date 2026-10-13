@@ -8,8 +8,8 @@
 # when present, otherwise it falls back to command-line tools.
 #
 # Usage:
-#   ./voice/astra-voice                  # push-to-talk conversation
-#   ./voice/astra-voice --listen         # hands-free (needs sounddevice)
+#   ./voice/astra-voice                  # continuous listening (default)
+#   ./voice/astra-voice --push-to-talk   # press Enter to talk, Enter to send
 #   ./voice/astra-voice --file clip.wav  # process one audio file
 #   ./voice/astra-voice --status         # show readiness
 #   ./voice/astra-voice --setup          # download local models

@@ -16,6 +16,9 @@ Environment variables (all optional, prefix ``ASTRA_VOICE_``):
 - ``ASTRA_VOICE_INPUT_DEVICE`` / ``ASTRA_VOICE_OUTPUT_DEVICE`` — audio device hint
 - ``ASTRA_VOICE_AUDIO_BACKEND``— ``auto`` (default), ``sounddevice`` or ``cli``
 - ``ASTRA_VOICE_KEEP_AUDIO``   — keep temporary WAVs for debugging
+- ``ASTRA_VOICE_VAD_THRESHOLD``— energy gate for endpoint detection (0 = auto)
+- ``ASTRA_VOICE_SILENCE``      — seconds of silence that ends an utterance (0.8)
+- ``ASTRA_VOICE_MAX_UTTERANCE``— max seconds for one utterance (15)
 """
 from __future__ import annotations
 
@@ -59,6 +62,16 @@ def _env_int(name: str, default: int = 0) -> int:
         return default
 
 
+def _env_float(name: str, default: float = 0.0) -> float:
+    raw = _env(name)
+    if raw is None:
+        return default
+    try:
+        return float(str(raw).strip())
+    except ValueError:
+        return default
+
+
 def _first_existing(candidates) -> Optional[str]:
     """Return the first candidate that is an existing path or on ``PATH``."""
     for candidate in candidates:
@@ -89,6 +102,11 @@ class VoiceConfig:
     output_device: Optional[str] = None
     audio_backend: str = "auto"
     keep_audio: bool = False
+
+    # Endpoint detection (continuous listening).
+    vad_threshold: int = 0          # 0 = calibrate automatically
+    silence_seconds: float = 0.8    # pause that ends an utterance
+    max_utterance_seconds: float = 15.0
 
     @classmethod
     def from_env(cls) -> "VoiceConfig":
@@ -127,6 +145,9 @@ class VoiceConfig:
         cfg.output_device = _env("OUTPUT_DEVICE")
         cfg.audio_backend = (_env("AUDIO_BACKEND", "auto") or "auto").lower()
         cfg.keep_audio = _env_bool("KEEP_AUDIO", False)
+        cfg.vad_threshold = _env_int("VAD_THRESHOLD", 0)
+        cfg.silence_seconds = _env_float("SILENCE", 0.8)
+        cfg.max_utterance_seconds = _env_float("MAX_UTTERANCE", 15.0)
         return cfg
 
     @staticmethod
