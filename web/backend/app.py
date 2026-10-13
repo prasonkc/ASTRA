@@ -12,9 +12,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -30,6 +30,7 @@ from .astra_service import (
     set_browser_context,
     submit_command_result,
 )
+from .voice_api import get_voice_service
 
 
 @asynccontextmanager
@@ -41,7 +42,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="ASTRA Web", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="ASTRA Web", version="1.1.0", lifespan=lifespan)
 
 # The ASTRA Firefox extension runs on its own origin and POSTs page context
 # here, so allow cross-origin requests. The server only ever binds to
@@ -115,6 +116,12 @@ class BrowserMessagePayload(BaseModel):
     """A chat message sent from the ASTRA browser extension popup."""
 
     message: str = ""
+
+
+class SpeakRequest(BaseModel):
+    """Text the browser voice mode asks the server to synthesise."""
+
+    text: str = ""
 
 
 @app.get("/api/files")
@@ -216,6 +223,49 @@ def browser_message(payload: BrowserMessagePayload):
     in the same session. Blocks until the turn finishes.
     """
     return run_browser_message(payload.message)
+
+
+# --- voice mode (browser microphone + local speech layer) --------------------
+@app.get("/api/voice/status")
+def voice_status():
+    """Whether the local speech layer (whisper.cpp / piper) is ready.
+
+    The browser does the recording and playback, so this only reports whether
+    transcription is available (and, separately, whether replies can be spoken).
+    """
+    return get_voice_service().status()
+
+
+@app.post("/api/voice/transcribe")
+async def voice_transcribe(request: Request, format: str = "webm"):
+    """Transcribe one recorded clip and return its text.
+
+    The browser voice mode records a short utterance and POSTs the raw audio as
+    the request body (``Content-Type: audio/webm`` and friends). Any container
+    ffmpeg reads is fine — the clip is normalised to 16 kHz mono WAV before
+    whisper. The reply is ``{ok, text}``.
+    """
+    data = await request.body()
+    suffix = "." + (format or "webm").lstrip(".")
+    try:
+        text = get_voice_service().transcribe_bytes(data, suffix=suffix)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the client as 503
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"ok": True, "text": text}
+
+
+@app.post("/api/voice/speak")
+def voice_speak(payload: SpeakRequest):
+    """Synthesise a reply to speech and stream it back as a WAV."""
+    try:
+        wav = get_voice_service().synthesize_wav(payload.text)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the client
+        raise HTTPException(status_code=503, detail=str(exc))
+    return Response(
+        content=wav,
+        media_type="audio/wav",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # --- provider configuration --------------------------------------------------

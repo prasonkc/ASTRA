@@ -237,11 +237,12 @@ ASTRA/
     │   ├── __init__.py
     │   ├── run.py             # entrypoint (arg parsing, browser, uvicorn)
     │   ├── app.py             # FastAPI routes + static serving
-    │   └── astra_service.py   # thread-safe wrapper over the core
+    │   ├── astra_service.py   # thread-safe wrapper over the core
+    │   └── voice_api.py       # browser voice mode: local STT/TTS endpoints
     └── frontend/
         ├── index.html
-        ├── styles.css
-        ├── app.js
+        ├── styles.css         # includes the voice-mode mic button/banner
+        ├── app.js             # includes the browser voice-mode loop
         └── favicon.svg
 ├── extension/                 # ASTRA Firefox extension (observe + automate)
 │   └── firefox/
@@ -1354,7 +1355,8 @@ Request models: `ChatRequest{message, session_id?}`,
 `NewSessionRequest{title?}`, `SwitchRequest{session_id}`,
 `ProviderRequest{provider, model?, api_key?, base_url?, thinking?}`,
 `ThinkingRequest{thinking}`, `LocalSetupRequest{model, install=True}`,
-`BrowserContextPayload`, `CommandResultPayload`, `BrowserMessagePayload{message}`.
+`BrowserContextPayload`, `CommandResultPayload`, `BrowserMessagePayload{message}`,
+`SpeakRequest{text}`.
 See [§13](#13-http-api-reference) for the route table.
 
 ### 11.5 Generated files (`GET /api/files`)
@@ -1364,6 +1366,52 @@ The core resolves relative output paths against `core/` (downloads go to
 relative to `CORE_DIR`, resolves it, and refuses anything that is not a file
 strictly inside `CORE_DIR` (traversal and host paths return `404`). Responses are
 served inline.
+
+### 11.6 Voice mode — `web/backend/voice_api.py`
+
+The web app can be driven by voice: a **mic button** in the composer enters
+voice mode, where the browser captures the microphone and plays the audio while
+the server runs the same local speech layer the terminal `/voice` command uses
+(§12). No new model and no new audio device are involved — the browser *is* the
+microphone and speaker, so only the two pure halves are needed:
+
+```
+browser mic ─▶ POST /api/voice/transcribe ─▶ whisper.cpp ─▶ text
+text ─▶ POST /api/chat (normal stream) ─▶ reply
+reply ─▶ POST /api/voice/speak ─▶ piper ─▶ WAV ─▶ browser speaker
+```
+
+`VoiceService` (a lazy, thread-safe singleton from `get_voice_service()`) imports
+`voice.backend.{config,deps,stt,tts}` after adding the repository root to
+`sys.path` — exactly like `core/controller/voice_controller.py`. It reuses the
+`VoiceConfig`/`build_status` helpers so a machine missing whisper.cpp or piper
+gets the same actionable "not ready" report as the CLI, never a broken import.
+
+Endpoints ([§13](#13-http-api-reference)):
+
+- `GET /api/voice/status` → `{available, ready, stt_ready, tts_ready,
+  audio_ready, stt_model, tts_model, problems, notes}`. `ready` reflects
+  **speech-to-text** only (the browser supplies the audio device); `tts_ready`
+  gates spoken replies.
+- `POST /api/voice/transcribe?format=webm` — the raw recorded clip as the request
+  body (no multipart dependency). Any container ffmpeg reads is accepted; the
+  clip is normalised to 16 kHz mono WAV before whisper. Returns `{ok, text}` or
+  `503` with a `detail` reason.
+- `POST /api/voice/speak` — `{text}` in, `audio/wav` out (piper). Returns `503`
+  when TTS is unavailable, and the browser falls back to its own
+  `speechSynthesis`.
+
+`_speech_text()` flattens the reply for reading aloud (code fences removed,
+markdown/URLs stripped, clipped to `MAX_SPEECH_CHARS = 1500` at a sentence
+boundary) so long answers don't drone on.
+
+The frontend side ([§14](#14-frontend-reference)) records one utterance at a
+time with `MediaRecorder` and a small energy-gated endpoint detector (the browser
+analogue of `AudioIO.record_utterance`), auto-stops after ~1.2 s of silence,
+transcribes, sends the text through the normal `sendMessage()` path, and speaks
+the reply before listening again. Clicking the mic (or `Esc`) exits. The
+extension popup's **Voice mode** button opens this page with `?voice=1`, which
+auto-enters the mode on load (see `extension/firefox/ARCHITECTURE.md`).
 
 ---
 
@@ -1538,6 +1586,12 @@ Implementation:
   returns to the prompt; the microphone/temp dir is released via
   `loop.audio.cleanup()`.
 
+The same speech modules also power **web voice mode** ([§11.6](#116-voice-mode--webbackendvoice_apipy)):
+there the browser records and plays the audio, and `web/backend/voice_api.py`
+exposes whisper.cpp/piper through `GET /api/voice/status`,
+`POST /api/voice/transcribe` and `POST /api/voice/speak`. The Firefox extension
+popup's **Voice mode** button opens that page.
+
 ---
 
 ## 13. HTTP API reference
@@ -1564,6 +1618,9 @@ All endpoints are on the FastAPI app. JSON bodies unless noted.
 | `GET` | `/api/browser/commands` | — | `{command}` (`{id, name, arguments}` or `null`) |
 | `POST` | `/api/browser/commands/{id}/result` | `CommandResultPayload` | `{accepted}` (404 if unknown/finished) |
 | `POST` | `/api/browser/message` | `BrowserMessagePayload` | `{ok, reply, error, session_id}` (extension popup chat) |
+| `GET` | `/api/voice/status` | — | `{available, ready, stt_ready, tts_ready, audio_ready, stt_model, tts_model, problems, notes}` |
+| `POST` | `/api/voice/transcribe?format=webm` | raw audio body | `{ok, text}` (503 when STT is not ready) |
+| `POST` | `/api/voice/speak` | `SpeakRequest` | `audio/wav` (503 when TTS is not ready) |
 | `GET` | `/api/files?path=…` | — | file (inline) or 404 |
 | `GET` | `/` | — | `index.html` |
 | `GET` | `/favicon.ico` | — | `favicon.svg` or 404 |
@@ -1624,7 +1681,9 @@ Structural shell:
   - `div#scrim` — mobile drawer scrim.
   - `main.chat` — header (`#menu-toggle`, `#chat-title-text`, `#settings-btn`,
     `#header-model`), `#messages` (with `#empty-state` and suggestion buttons),
-    and the composer (`#input`, `#send`, `#stop`, `#composer-hint`).
+    and the composer: a `#voice-banner` (`#voice-text`, `#voice-exit`) shown while
+    voice mode is active, plus the input row (`#input`, `#voice-btn`, `#send`,
+    `#stop`) and `#composer-hint`.
 - Settings panel: `#settings-scrim` + `aside.settings-panel#settings-modal`
   containing `#settings-close` and `#settings-body`.
 - `#toast-wrap` for notifications.
@@ -1668,6 +1727,9 @@ paragraphs.
    `\n`, `JSON.parse`s each complete line and dispatches via `handleEvent`.
 4. In `finally`: finalize the turn, re-enable input, refresh the session list.
 
+`sendMessage` resolves with the turn's accumulated reply text (`turn.fullText`,
+built in `appendContent`) so callers such as voice mode can speak it back.
+
 `handleEvent(evt, turn)` dispatches `session`/`thinking`/`content`/`tool_call`/
 `tool_result`/`error`/`done`. Turn rendering uses
 `appendThinking` (collapsible "Reasoning" `<details>`), `appendContent`
@@ -1678,6 +1740,17 @@ persisted transcript, re-pairing tool cards with `role: "tool"` messages.
 
 **Composer / sidebar.** `autoResize`, Enter-to-send (Shift+Enter newline), the
 `.suggestions` buttons, and `openSidebar`/`closeSidebar` for the mobile drawer.
+
+**Voice mode.** `voiceBtn` toggles a hands-free session. `enterVoiceMode()` checks
+`refreshVoiceStatus()` (`GET /api/voice/status`) then runs `voiceLoop(state)`:
+`captureUtterance()` records with `MediaRecorder`, metering an `AnalyserNode` and
+auto-stopping after ~1.2 s of silence (energy-gated endpoint detection, ~350 ms
+ambient calibration); `transcribeClip(blob)` POSTs the raw audio to
+`/api/voice/transcribe`; the text goes through `sendMessage()`; `speakReply()`
+plays the reply from `/api/voice/speak` (falling back to `speechSynthesis`), then
+the loop listens again. `exitVoiceMode()` (mic click, **Exit voice**, or `Esc`)
+stops recording, playback and speech. The page auto-enters when opened with
+`?voice=1` (the extension's deep link).
 
 **Settings panel.** `el(tag, props, children)` is a tiny DOM builder;
 `fieldEl(label, input, hint)` a labelled field. The panel is config-driven:
@@ -1934,8 +2007,19 @@ selected.
 **`/voice` says the speech layer is unavailable, or `--status` shows missing
 pieces.** Run `./voice/astra-voice --setup` (or set `ASTRA_VOICE_WHISPER_BIN`,
 `ASTRA_VOICE_STT_MODEL`, `ASTRA_VOICE_PIPER_BIN`, `ASTRA_VOICE_TTS_MODEL`). The
-terminal `/voice` command uses the very same files and readiness check as the
-standalone wrapper, so `--status` is the single place to look.
+terminal `/voice` command, the standalone wrapper, and web voice mode all use the
+very same files and readiness check, so `--status` is the single place to look.
+
+**The web mic button says voice isn't set up.** Web voice mode reuses the
+whisper.cpp/piper binaries and models (no audio device is needed — the browser
+owns the mic and speakers). Verify with `./voice/astra-voice --status`; the
+server reports the same problems on `GET /api/voice/status`.
+
+**The extension's "Voice mode" button says it needs the web app.** Voice mode is
+a web-app page (`/?voice=1`), so the popup opens `{endpoint}/?voice=1`. If you
+are running the terminal app's own bridge on port `8765` instead of `./web/astra-web`,
+that stdlib listener does not serve the page — start the web app (they share the
+default port, so only one frontend can listen at a time).
 
 **Voice transcripts are wrong / repeat a canned phrase.** The transcript is
 whatever **whisper.cpp** heard. If you are testing with a stub `whisper-cli` on
@@ -2039,6 +2123,9 @@ Provider/model aliases: `local`→`ollama`, `gpt`→`openai`, `claude`→`anthro
 | `GET` | `/api/browser/commands` | no | Extension claims the next queued browser command |
 | `POST` | `/api/browser/commands/{id}/result` | no | Extension reports a command's result |
 | `POST` | `/api/browser/message` | no | Extension popup sends a chat message to the running agent |
+| `GET` | `/api/voice/status` | no | Local speech layer readiness (browser voice mode) |
+| `POST` | `/api/voice/transcribe` | no | Raw audio body → transcript (whisper.cpp) |
+| `POST` | `/api/voice/speak` | no | Text → `audio/wav` (piper) |
 | `GET` | `/api/files` | no | Serve a generated file |
 
 ---

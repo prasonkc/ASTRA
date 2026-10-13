@@ -2,8 +2,9 @@
 
 Connects your local ASTRA agent to your real Firefox browser. It **observes** the
 page you are viewing (so ASTRA can explain it), lets ASTRA **automate** the
-browser (tabs, navigation, search, clicking, typing) through tools, and lets you
-**chat** with the running agent straight from the popup.
+browser (tabs, navigation, search, clicking, typing) through tools, lets you
+**chat** with the running agent straight from the popup, and jumps into
+hands-free **voice mode** with one click.
 
 > For the full design — wire protocol, command lifecycle, security model — see
 > [`ARCHITECTURE.md`](ARCHITECTURE.md).
@@ -72,6 +73,16 @@ see the result.
 Because the agent shares the session, a message sent from the browser is saved in
 your normal chat history and can use every tool, including `browser_context`
 (so *"explain this page"* works straight from the popup).
+
+### Voice mode
+
+The **🎙 Voice mode** button opens the web app's voice mode (`{endpoint}/?voice=1`),
+backed by the local speech layer (whisper.cpp speech-to-text + piper
+text-to-speech). Behind the scenes it first checks `GET /api/voice/status`; if
+the speech models aren't installed (or the web app isn't the frontend running)
+it says so instead of opening a dead page. Voice mode lives in the web app
+because the mic/speaker UI needs a full page — the terminal app's stdlib bridge
+does not serve it.
 
 ## Requirements
 

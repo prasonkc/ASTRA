@@ -67,8 +67,16 @@
       </div>
 
       <div class="composer">
+        <div class="voice-banner" id="voice-banner" hidden>
+          <span class="voice-pulse" aria-hidden="true"></span>
+          <span class="voice-text" id="voice-text">Listening…</span>
+          <button class="voice-exit" id="voice-exit" type="button">Exit voice</button>
+        </div>
         <div class="composer-inner">
           <textarea id="input" rows="1" placeholder="Message ASTRA…  (Enter to send, Shift+Enter for a new line)"></textarea>
+          <button class="voice-btn" id="voice-btn" type="button" aria-label="Voice mode" aria-pressed="false" title="Voice mode — talk to ASTRA and hear replies">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 14a3 3 0 003-3V5a3 3 0 10-6 0v6a3 3 0 003 3zm5-3a5 5 0 01-10 0H5a7 7 0 006 6.92V21h2v-2.08A7 7 0 0019 11h-2z"/></svg>
+          </button>
           <button class="send-btn" id="send" aria-label="Send">
             <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.993.993 0 00-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/></svg>
           </button>

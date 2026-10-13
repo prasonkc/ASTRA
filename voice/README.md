@@ -44,17 +44,23 @@ If only *part* of the stack is installed, the wrapper degrades gracefully: with
 whisper but no piper, you talk and read the replies; with neither, `--status`
 tells you exactly what to install.
 
-## Two ways to use it
+## Ways to use it
 
-There are two frontends for the same speech layer:
+There are three hosts for the same speech layer:
 
 * **Standalone** — `./voice/astra-voice` runs its own process and its own
   conversation (below).
 * **Inside the terminal** — type **`/voice`** at the ASTRA prompt to start
   continuous listening *in the same session you already have open* (see
   [Using voice from the terminal](#using-voice-from-the-terminal)).
+* **In the web app** — the composer's **🎙 mic button** enters hands-free voice
+  mode. The *browser* owns the microphone and speaker; the server reuses this
+  speech layer for speech-to-text (whisper.cpp) and text-to-speech (piper) via
+  `web/backend/voice_api.py`. The Firefox extension popup's **Voice mode**
+  button opens that page. No audio device or extra Python packages are needed on
+  the server — just the same models `--setup` installs.
 
-Both use the exact same local models and configuration; pick whichever fits how
+All three use the same local models and configuration; pick whichever fits how
 you are working.
 
 ## Start

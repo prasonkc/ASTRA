@@ -173,6 +173,34 @@
         color: #e6e6e6;
         background: #232733;
       }
+
+      /* ---- voice mode ---------------------------------------------------- */
+      #voice {
+        flex: 1;
+        color: #e6f6ff;
+        background: #10344a;
+        border-color: #1d5b7d;
+      }
+      #voice:hover {
+        background: #14425e;
+      }
+      #voice:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      #voice-status {
+        margin-top: 6px;
+        font-size: 11px;
+        color: #8a93a3;
+        text-align: center;
+        min-height: 14px;
+      }
+      #voice-status.err {
+        color: #ff7b72;
+      }
+      #voice-status.ok {
+        color: #7ee787;
+      }
     </style>
   </head>
   <body>
@@ -188,6 +216,13 @@
       <button id="chat-send" type="button">Send</button>
       <button id="chat-clear" type="button">Clear</button>
     </div>
+
+    <div class="row">
+      <button id="voice" type="button" title="Talk to ASTRA hands-free (opens voice mode in the web app)">
+        🎙 Voice mode
+      </button>
+    </div>
+    <div id="voice-status"></div>
 
     <script src="popup.js"></script>
   </body>

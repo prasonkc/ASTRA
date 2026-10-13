@@ -60,7 +60,7 @@ running in the page's `MAIN` JS world (see §8).
 │                                                                        │
 │  background.js   toggle • per-tab context • command poller • chat sender │
 │  content.js      page snapshot • mouse/selection • DOM command executor │
-│  popup.js/html   integration button + status • message box             │
+│  popup.js/html   integration button + status • message box • voice button │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -159,6 +159,28 @@ popup.js ─ send (Enter/button) ─▶ background.js
 - Because the session is shared, a popup message is persisted in normal chat
   history and can call every tool — including `browser_context` ("explain this
   page") and the `ext_*` automation tools.
+
+### 4c. Data flow D — Voice mode (popup → web app)
+
+Voice mode is a **web-app page**, not an extension feature: the browser needs a
+real page to own the microphone and speakers. The popup's **🎙 Voice mode**
+button therefore acts as a deep link:
+
+```
+popup.js ─ GET {endpoint}/api/voice/status ─▶ check the speech layer is ready
+     └ (not ready → show the missing piece, e.g. "run ./voice/astra-voice --setup")
+     └ (ready) ─ browser.tabs.create({ url: endpoint + "/?voice=1" }) ─▶ web page
+         web app auto-enters voice mode on load (whisper.cpp STT + piper TTS
+         run locally on the server; the browser records and plays audio)
+```
+
+- `GET /api/voice/status` exists only on the web app's FastAPI server (the
+  terminal's stdlib `browser_server.py` implements just the browser channels), so
+  a failed check is also a reliable way to see that the web app — which shares
+  the extension's default port `8765` — is the frontend actually running.
+- The transcript/reply flow then uses the normal `POST /api/chat` channel, so a
+  voiced turn lands in the same session the user sees in the web UI and the
+  popup chat.
 
 ---
 
@@ -291,11 +313,12 @@ the rest are delegated to `content.js` via the `run-command` message.
 | `extension/firefox/manifest.json` | MV3 manifest; `<all_urls>` host permission, `storage` |
 | `extension/firefox/background.js` | toggle, per-tab context, command poller + executors, chat sender |
 | `extension/firefox/content.js` | snapshot + mouse/selection + DOM command executor |
-| `extension/firefox/popup.*` | integrate button + status + message box |
+| `extension/firefox/popup.*` | integrate button + status + message box + voice-mode button |
 | `core/browser_bridge.py` | page-context store + command queue/condition + message handler |
 | `core/browser_server.py` | terminal stdlib receiver for all channels |
 | `core/browser_context_tool.py` | `browser_context` tool (read snapshots) |
 | `core/browser_control_tool.py` | 12 `ext_*` tools (enqueue commands) |
 | `core/agent/chat.py` | terminal REPL; registers the popup chat handler |
 | `web/backend/astra_service.py` | web service; `run_message` for popup chat |
+| `web/backend/voice_api.py` | `GET /api/voice/status` + STT/TTS endpoints (voice mode) |
 | `web/backend/app.py` | FastAPI routes for all channels |

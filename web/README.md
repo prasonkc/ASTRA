@@ -12,11 +12,12 @@ web/
 ├── backend/           # FastAPI service that proxies the ASTRA core
 │   ├── run.py         # entrypoint (arg parsing, browser open, uvicorn)
 │   ├── app.py         # HTTP routes + static frontend serving
-│   └── astra_service.py
+│   ├── astra_service.py
+│   └── voice_api.py   # browser voice mode: local whisper.cpp/piper endpoints
 └── frontend/          # vanilla HTML/CSS/JS, black + yellow theme
-    ├── index.html
+    ├── index.html     # mic button (#voice-btn) + voice banner
     ├── styles.css
-    ├── app.js
+    ├── app.js         # voice-mode loop (record → transcribe → chat → speak)
     └── favicon.svg
 ```
 
@@ -111,6 +112,30 @@ Supported API:
 | GET      | `/api/browser/commands`            | Extension claims the next queued browser command |
 | POST     | `/api/browser/commands/{id}/result`| Extension reports a command's result |
 | POST     | `/api/browser/message`             | Extension popup sends a chat message; returns the agent's reply |
+| GET      | `/api/voice/status`                | Local speech layer readiness (browser voice mode) |
+| POST     | `/api/voice/transcribe`            | Raw audio body → transcript (whisper.cpp) |
+| POST     | `/api/voice/speak`                 | Text → `audio/wav` (piper) |
+
+## Voice mode (mic → ASTRA → speaker)
+
+Click the **🎙 mic button** next to the composer to enter voice mode: it listens
+hands-free ("speak, then pause"), transcribes each utterance, sends it through
+the normal `/api/chat` stream, and speaks the reply back before listening again.
+Click the mic (or **Exit voice** / `Esc`) to leave. Opening the page with
+`?voice=1` (e.g. from the Firefox extension's **Voice mode** button) enters voice
+mode automatically.
+
+The browser owns the microphone and the speakers; the server only runs the two
+pure halves of the ASTRA voice layer — **whisper.cpp** (speech-to-text) and
+**piper** (text-to-speech) — via `backend/voice_api.py`, the same modules the
+terminal `/voice` command uses. So voice mode needs the speech models
+(`./voice/astra-voice --setup`), but **no extra Python packages** and no audio
+device on the server.
+
+Voice is optional and degrades gracefully: with whisper missing, the mic button
+reports the specific missing piece from `GET /api/voice/status`; with piper
+missing, replies are printed but not spoken (and fall back to the browser's own
+`speechSynthesis` if the endpoint errors).
 
 ## Browser integration (Firefox extension)
 

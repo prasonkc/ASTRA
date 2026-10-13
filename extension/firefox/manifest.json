@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ASTRA",
-  "version": "0.5.0",
-  "description": "Connect ASTRA to your browser: share the page you are viewing (URL, title, DOM, selection, mouse), let ASTRA automate tabs, search, clicking and typing locally, and chat with the agent from the popup.",
+  "version": "0.6.0",
+  "description": "Connect ASTRA to your browser: share the page you are viewing (URL, title, DOM, selection, mouse), let ASTRA automate tabs, search, clicking and typing locally, chat with the agent from the popup, and jump into hands-free voice mode.",
   "browser_specific_settings": {
     "gecko": {
       "id": "astra@astra.local",

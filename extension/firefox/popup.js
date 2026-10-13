@@ -15,15 +15,20 @@ const sendBtn = document.getElementById("chat-send");
 const clearBtn = document.getElementById("chat-clear");
 const logEl = document.getElementById("chat-log");
 
+const voiceBtn = document.getElementById("voice");
+const voiceStatusEl = document.getElementById("voice-status");
+
 let enabled = false;
 let chatPending = false;
 let pollTimer = null;
+let currentEndpoint = "";
 
 /* ------------------------------------------------------------ integration -- */
 
 function apply(state) {
   if (!state) return;
   enabled = !!state.enabled;
+  currentEndpoint = state.endpoint || currentEndpoint;
   endpointEl.textContent = state.endpoint || "";
 
   if (enabled) {
@@ -147,6 +152,46 @@ clearBtn.addEventListener("click", async () => {
     renderChat({ pending: false });
   }
 });
+
+/* ------------------------------------------------------------------ voice --- */
+
+function voiceBaseUrl() {
+  return (currentEndpoint || "http://127.0.0.1:8765").replace(/\/+$/, "");
+}
+
+function setVoiceStatus(text, kind) {
+  if (!voiceStatusEl) return;
+  voiceStatusEl.textContent = text || "";
+  voiceStatusEl.className = kind || "";
+}
+
+// Voice mode lives in the web app (it owns the microphone UI). Check that it is
+// reachable and the local speech layer is installed, then open it with the
+// ?voice=1 deep link so the page enters voice mode on load.
+async function openVoiceMode() {
+  const base = voiceBaseUrl();
+  voiceBtn.disabled = true;
+  setVoiceStatus("Checking voice\u2026");
+  try {
+    const res = await fetch(`${base}/api/voice/status`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const status = await res.json();
+    if (!status.ready) {
+      const detail = (status.problems && status.problems[0]) || "run ./voice/astra-voice --setup";
+      setVoiceStatus(`Voice not ready \u2014 ${detail}`, "err");
+      return;
+    }
+    await browser.tabs.create({ url: `${base}/?voice=1` });
+    setVoiceStatus("Opening voice mode\u2026", "ok");
+    window.close();
+  } catch (err) {
+    setVoiceStatus("Voice mode needs the web app (./web/astra-web) running.", "err");
+  } finally {
+    voiceBtn.disabled = false;
+  }
+}
+
+voiceBtn.addEventListener("click", openVoiceMode);
 
 input.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {

@@ -34,6 +34,10 @@
   const settingsBody = $("settings-body");
   const toastWrap = $("toast-wrap");
   const composerHint = $("composer-hint");
+  const voiceBtn = $("voice-btn");
+  const voiceBanner = $("voice-banner");
+  const voiceTextEl = $("voice-text");
+  const voiceExitBtn = $("voice-exit");
 
   // ---- helpers -------------------------------------------------------------
   const escapeHtml = (s) =>
@@ -331,6 +335,7 @@
       thinkingBody: null,
       currentText: null,
       textBuf: "",
+      fullText: "",
       raf: null,
     };
   }
@@ -357,6 +362,7 @@
       turn.textBuf = "";
     }
     turn.textBuf += delta;
+    turn.fullText += delta;
     turn.currentText._md = turn.textBuf;
     const node = turn.currentText;
     if (!turn.raf) {
@@ -562,7 +568,7 @@
 
   async function sendMessage(text) {
     text = (text || "").trim();
-    if (!text || streaming) return;
+    if (!text || streaming) return "";
 
     hideEmpty();
     appendUserTurn(text);
@@ -617,6 +623,8 @@
       abortController = null;
       refreshSessions();
     }
+    // Callers (voice mode) use the accumulated reply text to speak it back.
+    return turn.fullText || "";
   }
 
   function handleEvent(evt, turn) {
@@ -681,6 +689,323 @@
   document.querySelectorAll(".suggestions button").forEach((btn) => {
     btn.addEventListener("click", () => sendMessage(btn.dataset.suggest || btn.textContent));
   });
+
+  // ---- voice mode ----------------------------------------------------------
+  // Optional, fully local speech. The browser captures the microphone and plays
+  // the audio; the server runs whisper.cpp (STT) and piper (TTS). Click the mic
+  // to listen hands-free ("speak, then pause"); click it again to stop.
+  let voiceState = null;      // { stopped } while a voice session is open
+  let voiceAudio = null;      // reply currently being played aloud
+  let voiceAudioCtx = null;   // active AudioContext (for level metering)
+  let voiceReady = false;     // server-side transcription is available
+  let voiceTtsReady = false;  // replies can be spoken back
+
+  const VOICE_SILENCE_MS = 1200;   // pause that ends an utterance
+  const VOICE_MAX_MS = 15000;      // hard cap on one utterance
+  const VOICE_NO_SPEECH_MS = 8000; // stop waiting if nothing is said
+  const VOICE_MIN_BYTES = 2000;    // ignore empty/silent clips
+
+  function voiceSupported() {
+    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+  }
+
+  function setVoiceText(text) {
+    if (voiceTextEl) voiceTextEl.textContent = text;
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function refreshVoiceStatus() {
+    try {
+      const status = await api("/api/voice/status");
+      voiceReady = !!status.ready;
+      voiceTtsReady = !!status.tts_ready;
+      return status;
+    } catch (e) {
+      voiceReady = false;
+      voiceTtsReady = false;
+      return { ready: false, problems: [e.message] };
+    }
+  }
+
+  // Record one utterance, auto-stopping after a pause (energy-gated endpoint
+  // detection, the same idea as the terminal /voice continuous mode).
+  async function captureUtterance(state) {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioCtx();
+    voiceAudioCtx = ctx;
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+
+    const recorder = new MediaRecorder(stream);
+    const chunks = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size) chunks.push(e.data);
+    };
+    recorder.start();
+
+    const cleanup = () => {
+      try { source.disconnect(); } catch { /* ignore */ }
+      try { ctx.close(); } catch { /* ignore */ }
+      if (voiceAudioCtx === ctx) voiceAudioCtx = null;
+      stream.getTracks().forEach((t) => t.stop());
+    };
+
+    return new Promise((resolve) => {
+      const samples = new Float32Array(analyser.fftSize);
+      const start = performance.now();
+      const ambient = [];
+      let threshold = 0.02;
+      let calibrated = false;
+      let heardSpeech = false;
+      let lastLoud = start;
+
+      const finish = () => {
+        clearInterval(timer);
+        const build = () => {
+          const blob = chunks.length
+            ? new Blob(chunks, { type: recorder.mimeType || "audio/webm" })
+            : null;
+          cleanup();
+          resolve(blob);
+        };
+        if (recorder.state !== "inactive") {
+          recorder.onstop = build;
+          try { recorder.stop(); } catch { build(); }
+        } else {
+          build();
+        }
+      };
+
+      const tick = () => {
+        if (state.stopped) return finish();
+        analyser.getFloatTimeDomainData(samples);
+        let sum = 0;
+        for (let i = 0; i < samples.length; i += 1) sum += samples[i] * samples[i];
+        const rms = Math.sqrt(sum / samples.length);
+        const now = performance.now();
+
+        if (!calibrated) {
+          ambient.push(rms);
+          if (now - start > 350) {
+            ambient.sort((a, b) => a - b);
+            const noise = ambient[Math.floor(ambient.length / 2)] || 0.004;
+            threshold = Math.max(0.012, noise * 2.5);
+            calibrated = true;
+            lastLoud = now;
+          }
+          return;
+        }
+
+        if (rms > threshold) {
+          if (!heardSpeech) setVoiceText("Listening… (recording)");
+          heardSpeech = true;
+          lastLoud = now;
+        }
+
+        if (heardSpeech && (now - lastLoud > VOICE_SILENCE_MS || now - start > VOICE_MAX_MS)) {
+          return finish();
+        }
+        if (!heardSpeech && now - start > VOICE_NO_SPEECH_MS) {
+          return finish();
+        }
+      };
+
+      const timer = setInterval(tick, 60);
+    });
+  }
+
+  function audioFormat(mime) {
+    const type = (mime || "").toLowerCase();
+    if (type.includes("ogg")) return "ogg";
+    if (type.includes("mp4") || type.includes("aac") || type.includes("m4a")) return "mp4";
+    if (type.includes("wav")) return "wav";
+    return "webm";
+  }
+
+  async function transcribeClip(blob) {
+    const format = audioFormat(blob.type);
+    const res = await fetch("/api/voice/transcribe?format=" + format, {
+      method: "POST",
+      headers: { "Content-Type": blob.type || "audio/webm" },
+      body: blob,
+    });
+    if (!res.ok) {
+      let detail = "HTTP " + res.status;
+      try {
+        const body = await res.json();
+        if (body && body.detail) detail = body.detail;
+      } catch { /* ignore */ }
+      throw new Error(detail);
+    }
+    const data = await res.json();
+    return (data.text || "").trim();
+  }
+
+  function playUrl(url) {
+    return new Promise((resolve) => {
+      const audio = new Audio(url);
+      voiceAudio = audio;
+      const done = () => {
+        if (voiceAudio === audio) voiceAudio = null;
+        resolve();
+      };
+      audio.onended = done;
+      audio.onerror = done;
+      audio.play().catch(done);
+    });
+  }
+
+  function browserSpeak(text) {
+    if (!window.speechSynthesis) return Promise.resolve();
+    return new Promise((resolve) => {
+      try {
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.onend = resolve;
+        utter.onerror = resolve;
+        speechSynthesis.cancel();
+        speechSynthesis.speak(utter);
+      } catch {
+        resolve();
+      }
+    });
+  }
+
+  async function speakReply(text) {
+    const clean = (text || "").trim();
+    if (!clean) return;
+    if (voiceTtsReady) {
+      try {
+        const res = await fetch("/api/voice/speak", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: clean }),
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const buf = await res.arrayBuffer();
+        const url = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+        try {
+          await playUrl(url);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+        return;
+      } catch {
+        /* piper failed — fall back to the browser's own voice */
+      }
+    }
+    await browserSpeak(clean);
+  }
+
+  async function voiceLoop(state) {
+    while (!state.stopped) {
+      setVoiceText("Listening… speak, then pause");
+      let blob;
+      try {
+        blob = await captureUtterance(state);
+      } catch (e) {
+        if (!state.stopped) {
+          toast("Microphone error: " + e.message, "error");
+          exitVoiceMode();
+        }
+        return;
+      }
+      if (state.stopped) return;
+      if (!blob || blob.size < VOICE_MIN_BYTES) continue; // silence — keep listening
+
+      setVoiceText("Transcribing…");
+      let transcript = "";
+      try {
+        transcript = await transcribeClip(blob);
+      } catch (e) {
+        if (state.stopped) return;
+        setVoiceText("Couldn't transcribe (" + e.message + ")");
+        await sleep(900);
+        continue;
+      }
+      if (state.stopped) return;
+      if (!transcript) {
+        setVoiceText("Didn't catch that — still listening…");
+        await sleep(400);
+        continue;
+      }
+
+      setVoiceText("Thinking…");
+      let reply = "";
+      try {
+        reply = await sendMessage(transcript);
+      } catch {
+        reply = "";
+      }
+      if (state.stopped) return;
+
+      if (reply && voiceTtsReady) {
+        setVoiceText("Speaking…");
+        await speakReply(reply);
+      }
+      if (state.stopped) return;
+      await sleep(200);
+    }
+  }
+
+  async function enterVoiceMode() {
+    if (voiceState) return;
+    if (!voiceSupported()) {
+      toast("Voice mode needs microphone access — this browser can't record audio.", "error");
+      return;
+    }
+    if (streaming) {
+      toast("Wait for the current reply to finish.", "error");
+      return;
+    }
+    const status = await refreshVoiceStatus();
+    if (!status.ready) {
+      const detail = status.problems && status.problems[0]
+        ? status.problems[0]
+        : "run ./voice/astra-voice --setup";
+      toast("Voice isn't set up yet — " + detail, "error");
+      return;
+    }
+
+    voiceState = { stopped: false };
+    voiceBtn.classList.add("on");
+    voiceBtn.setAttribute("aria-pressed", "true");
+    voiceBanner.hidden = false;
+    setVoiceText("Listening… speak, then pause");
+    toast("Voice mode on — speak, then pause. Click the mic to exit.", "success");
+    voiceLoop(voiceState);
+  }
+
+  function exitVoiceMode() {
+    if (!voiceState) return;
+    voiceState.stopped = true;
+    voiceState = null;
+    if (voiceBtn) {
+      voiceBtn.classList.remove("on");
+      voiceBtn.setAttribute("aria-pressed", "false");
+    }
+    if (voiceBanner) voiceBanner.hidden = true;
+    if (voiceAudio) {
+      try { voiceAudio.pause(); } catch { /* ignore */ }
+      voiceAudio = null;
+    }
+    if (window.speechSynthesis) {
+      try { speechSynthesis.cancel(); } catch { /* ignore */ }
+    }
+  }
+
+  if (voiceBtn) {
+    voiceBtn.addEventListener("click", () => {
+      if (voiceState) exitVoiceMode();
+      else enterVoiceMode();
+    });
+  }
+  if (voiceExitBtn) voiceExitBtn.addEventListener("click", exitVoiceMode);
 
   // ---- sidebar (mobile) ----------------------------------------------------
   function openSidebar() {
@@ -1214,8 +1539,15 @@
   modelBadge.addEventListener("click", toggleSettings);
   settingsScrim.addEventListener("click", closeSettings);
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !settingsModal.hidden) closeSettings();
+    if (e.key !== "Escape") return;
+    if (!settingsModal.hidden) closeSettings();
+    else if (voiceState) exitVoiceMode();
   });
+
+  // The extension's "Voice mode" button opens this page with ?voice=1.
+  const wantsVoice =
+    new URLSearchParams(location.search).has("voice") ||
+    location.hash.replace("#", "").toLowerCase() === "voice";
 
   async function init() {
     await checkHealth();
@@ -1224,8 +1556,12 @@
     // Fetch provider config in the background so badges/hint show the real
     // provider without requiring the settings panel to be opened.
     loadConfig().catch(() => {});
+    // Warm the voice status so the first mic click is instant, and honour the
+    // deep link from the browser extension.
+    refreshVoiceStatus().catch(() => {});
     autoResize();
     inputEl.focus();
+    if (wantsVoice) enterVoiceMode();
   }
 
   init();

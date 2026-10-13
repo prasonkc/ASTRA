@@ -88,10 +88,12 @@ resident server, streaming STT, speaker diarisation, wake words. Both hosts are
 | `backend/install.py` | `--setup`: build whisper.cpp, download models, fetch piper. |
 | `astra-voice` | Shell launcher: venv, dependency install, exec `run.py`. |
 | `core/controller/voice_controller.py` | Terminal integration: the `/voice` command, plus `TerminalAgentAdapter` (terminal model → voice-loop agent API). |
+| `web/backend/voice_api.py` | Web integration: a `VoiceService` singleton exposing `stt.py`/`tts.py` behind `GET /api/voice/status`, `POST /api/voice/transcribe` and `POST /api/voice/speak`. |
 
-The diagram above is the **standalone** host. The terminal host reuses the same
-`config`/`audio`/`stt`/`tts`/`voice_loop` modules and swaps only the agent bridge
-(§5).
+The diagram above is the **standalone** host. The terminal host and the web host
+(`web/backend/voice_api.py`) reuse the same `config`/`stt`/`tts` modules and swap
+only the agent/audio bridge (§5, §11): the web host delegates recording and
+playback to the **browser** and needs only the two pure speech halves.
 
 ---
 
@@ -304,8 +306,10 @@ it.
 ## 10. Extension points / roadmap
 
 * **Streaming STT** — whisper.cpp server mode to avoid per-utterance model loads.
-* **HTTP surface** — expose `stt.py`/`tts.py` behind small endpoints so the web
-  UI and the Firefox extension can add a mic button.
+* ~~**HTTP surface**~~ — **done**: `web/backend/voice_api.py` exposes
+  `stt.py`/`tts.py` behind `GET /api/voice/status`,
+  `POST /api/voice/transcribe` and `POST /api/voice/speak`; the web composer's
+  🎙 button and the extension popup's **Voice mode** button drive it.
 * **Wake word** — a lightweight keyword spotter in front of continuous listening.
 * **Voice selection** — a `--voice` flag mapping friendly names to pyproject
   `speaker` ids for multi-speaker piper models.
