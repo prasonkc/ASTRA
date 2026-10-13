@@ -1,8 +1,11 @@
 # astra-voice
 
-A local speech wrapper around the standalone **ASTRA** terminal application — talk
-to your agent and hear it answer, entirely on your machine. ASTRA core stays a
-fully standalone app (`core/`); `voice/` only adds ears and a mouth.
+A local speech wrapper for **ASTRA** — talk to your agent and hear it answer,
+entirely on your machine. It works two ways: as a standalone process
+(`./voice/astra-voice`, described here) and as the terminal's built-in
+**`/voice`** command, which runs the same speech layer inside the terminal app.
+ASTRA core stays a fully standalone app (`core/`); `voice/` only adds ears and a
+mouth.
 
 ```
 voice/
@@ -41,6 +44,19 @@ If only *part* of the stack is installed, the wrapper degrades gracefully: with
 whisper but no piper, you talk and read the replies; with neither, `--status`
 tells you exactly what to install.
 
+## Two ways to use it
+
+There are two frontends for the same speech layer:
+
+* **Standalone** — `./voice/astra-voice` runs its own process and its own
+  conversation (below).
+* **Inside the terminal** — type **`/voice`** at the ASTRA prompt to start
+  continuous listening *in the same session you already have open* (see
+  [Using voice from the terminal](#using-voice-from-the-terminal)).
+
+Both use the exact same local models and configuration; pick whichever fits how
+you are working.
+
 ## Start
 
 ```bash
@@ -63,6 +79,40 @@ what you have said so far without waiting for the pause (turn this off with
 `--no-enter` or `ASTRA_VOICE_ENTER_SEND=0`). `--push-to-talk` switches back to
 press-Enter-to-talk, which is useful in noisy rooms or when you also want to type
 at the `voice>` prompt (`q` quits).
+
+## Using voice from the terminal
+
+You do not need the standalone launcher to talk to ASTRA. The terminal app has a
+built-in **`/voice`** command that runs the same speech layer *in-process* and
+drives the terminal's own agent, so a spoken turn continues the same session and
+history already open at the prompt:
+
+```
+You: /voice
+ASTRA voice  ·  local_setup/llama3
+Listening continuously — just speak, then pause — or press Enter to send.
+🎤 listening…
+You: what's on my calendar?
+ASTRA: …
+```
+
+| Command | Effect |
+|---------|--------|
+| `/voice` | Continuous listening (default). Speak, then pause; **Ctrl-C** returns to the prompt. |
+| `/voice once` | Record a single utterance, answer, then return to the prompt. |
+| `/voice push` | A push-to-talk sub-REPL: Enter records, typing sends text, `q` quits back to the terminal. |
+| `/voice status` | Show which speech components are installed (same report as `--status`). |
+| `/voice help` | List these options. |
+
+`/voice` is optional and degrades gracefully: if the speech layer is not
+installed, it prints exactly what is missing and points at
+`./voice/astra-voice --setup`. Nothing about the normal text terminal changes
+when you never use it.
+
+Because the terminal, `/voice` and the standalone wrapper all share one SQLite
+history file (`core/memory/chat_history.db`), prefer **one** live frontend at a
+time for a single coherent session (see the note under
+[Notes & limitations](#notes--limitations)).
 
 ## Setup & prerequisites
 

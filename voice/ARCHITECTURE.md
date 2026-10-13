@@ -8,18 +8,24 @@
 
 ## 1. Purpose & scope
 
-`voice/` gives ASTRA three new senses without touching the core:
+`voice/` gives ASTRA two new senses without changing its agent logic:
 
 1. **Hearing** — microphone audio → text, via **whisper.cpp** (local).
 2. **Speaking** — reply text → audio, via **piper** (local).
-3. **A conversation loop** — record → transcribe → ask the agent → speak.
+
+…plus a conversation loop — record → transcribe → ask the agent → speak — that
+runs in two hosts:
+
+* **Standalone** — `backend/run.py`, a process of its own (`./voice/astra-voice`).
+* **In the terminal** — the built-in **`/voice`** command, wired up by the thin
+  `core/controller/voice_controller.py`, which drives the terminal's own model.
 
 **In scope:** a runnable voice frontend, the speech layer as reusable modules,
-and best-effort local model setup.
+the terminal `/voice` integration, and best-effort local model setup.
 
-**Out of scope (by design):** modifying the core, adding a resident server,
-streaming STT, speaker diarisation, wake words. The wrapper is a *client* of the
-same core the terminal and web apps embed.
+**Out of scope (by design):** changing the core's agent behaviour, adding a
+resident server, streaming STT, speaker diarisation, wake words. Both hosts are
+*clients* of the same core the terminal and web apps embed.
 
 ### Design goals
 
@@ -27,7 +33,7 @@ same core the terminal and web apps embed.
 |------|---------------|
 | **Optional** | No dependency is mandatory; missing tools are reported, never fatal. |
 | **Local** | whisper.cpp + piper run offline; nothing leaves the machine. |
-| **No duplication** | Reuses `web.backend.astra_service.AstraService` for the agent. |
+| **No duplication** | The speech layer is shared; each host supplies its own agent bridge (AstraService standalone, the terminal model via a small adapter). |
 | **Swappable parts** | STT/TTS/audio are separate modules behind tiny interfaces. |
 | **Predictable config** | Environment-first resolution with sensible defaults. |
 
@@ -81,6 +87,11 @@ same core the terminal and web apps embed.
 | `backend/voice_loop.py` | `VoiceLoop` — the conversation orchestration: continuous listening (default), push-to-talk, and one-shot modes. |
 | `backend/install.py` | `--setup`: build whisper.cpp, download models, fetch piper. |
 | `astra-voice` | Shell launcher: venv, dependency install, exec `run.py`. |
+| `core/controller/voice_controller.py` | Terminal integration: the `/voice` command, plus `TerminalAgentAdapter` (terminal model → voice-loop agent API). |
+
+The diagram above is the **standalone** host. The terminal host reuses the same
+`config`/`audio`/`stt`/`tts`/`voice_loop` modules and swaps only the agent bridge
+(§5).
 
 ---
 
@@ -143,6 +154,9 @@ stdin is not a TTY).
 A recorder error is retried a few times before the loop gives up, so a transient
 "device busy" does not end the session.
 
+The terminal's `/voice` command runs this exact loop; **Ctrl-C** stops it and
+returns to the prompt (the standalone launcher exits the process instead).
+
 ### 4b. Push-to-talk (`--push-to-talk`)
 
 ```
@@ -193,6 +207,23 @@ Why reuse `AstraService`:
 Importing `astra_service` makes the core directory the process working directory
 and puts it on `sys.path` (a documented side effect of that module). The voice
 layer is unaffected because it uses absolute paths for all of its own files.
+
+### Two agent bridges
+
+`VoiceLoop` only needs an object with `ask(prompt, on_delta, on_tool)` and
+`describe()`. Each host supplies its own bridge, so the loop and speech modules
+are identical in both:
+
+| Host | Bridge | Backed by |
+|------|--------|-----------|
+| Standalone (`run.py`) | `backend/agent.py` → `VoiceAgent` | `web.backend.astra_service.AstraService` (its own worker thread + model). |
+| Terminal (`/voice`) | `core/controller/voice_controller.py` → `TerminalAgentAdapter` | the terminal's existing `AgentModel`, under the same `_turn_lock` the REPL and browser bridge use. |
+
+The terminal adapter maps the model's streaming chunks to `on_delta` and its
+`on_event` tool notifications to `on_tool`, and returns `{reply, error,
+session_id}` exactly like `VoiceAgent`. Because it runs in the terminal process,
+a spoken turn continues the **same** session/history already open at the prompt —
+no second brain, no extra process.
 
 ### Session behaviour
 

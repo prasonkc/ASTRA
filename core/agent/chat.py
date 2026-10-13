@@ -7,6 +7,7 @@ from ai.model import AgentModel
 from browser_server import browser_bridge_endpoint, start_browser_context_server
 from controller.provider_controller import ProviderController
 from controller.session_controller import SessionController
+from controller.voice_controller import VoiceController
 from utils.colors import (
     Colors, error, success, warning, info, title, dim, user_msg, important, secondary, bold
 )
@@ -29,6 +30,9 @@ class Chat:
         # share the same model/history but run on different threads.
         self._turn_lock = threading.Lock()
 
+        # Optional local speech frontend (/voice): drives the same model/history.
+        self.voice_controller = VoiceController(self.model, self._turn_lock)
+
     def start(self):
         print(title("Welcome to ASTRA. Type 'exit' to quit."))
         try:
@@ -38,6 +42,7 @@ class Chat:
             pass
         print(dim("Session commands: /s new | /s list | /s <num> | /s resume | /s del <num> | /s clear"))
         print(dim("Provider: /provider (local_setup · openai · anthropic · gemini) | /model <name> | /thinking on|off"))
+        print(dim("Voice: /voice (continuous listening) | /voice once | /voice push | /voice status"))
         self._register_browser_message_handler()
         self._start_browser_bridge()
         self._safe_show_current_session()
@@ -69,6 +74,13 @@ class Chat:
                 # Handle session commands
                 if user_input.startswith("/session") or user_input.startswith("/s "):
                     self.session_controller.handle(user_input)
+                    continue
+
+                # Handle voice mode (/voice, /voice status, ...). Blocks while a
+                # voice session is active; Ctrl-C returns to the prompt.
+                voice_cmd = user_input.strip()
+                if voice_cmd == "/voice" or voice_cmd.startswith("/voice "):
+                    self.voice_controller.handle(voice_cmd)
                     continue
 
                 # Generate response with error handling. The model is shared

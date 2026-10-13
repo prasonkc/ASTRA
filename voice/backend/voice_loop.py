@@ -16,6 +16,7 @@ loop continues.
 """
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
@@ -79,7 +80,8 @@ class VoiceLoop:
 
     def __init__(self, config, agent, stt, tts, audio, *,
                  speak: bool = True, stream: bool = True, cooldown: float = 0.4,
-                 out: Optional[Callable[..., None]] = None):
+                 out: Optional[Callable[..., None]] = None,
+                 continuous_hint: Optional[str] = None):
         self.config = config
         self.agent = agent
         self.stt = stt
@@ -91,6 +93,12 @@ class VoiceLoop:
         self.enter_to_send = bool(getattr(config, "enter_to_send", True))
         self._tty = _is_tty()
         self._out = out or print
+        # Trailing note shown when continuous listening starts. Overridable so a
+        # host that is not the standalone launcher (e.g. the terminal's /voice)
+        # can drop the launcher-specific --push-to-talk pointer.
+        self.continuous_hint = continuous_hint or (
+            "Ctrl-C to stop (--push-to-talk disables this)."
+        )
 
     # ---- presentation -------------------------------------------------------
     def banner(self) -> None:
@@ -227,12 +235,12 @@ class VoiceLoop:
             )
         stdin_tty = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
         manual = threading.Event() if (self.enter_to_send and self._tty and stdin_tty) else None
-        if manual is not None:
-            self._start_enter_watcher(manual)
+        stop = threading.Event() if manual is not None else None
+        watcher = self._start_enter_watcher(manual, stop) if manual is not None else None
         self.banner()
         hint = (" — or press Enter to send." if manual is not None else ".")
         self._out(_paint("Listening continuously — just speak, then pause" + hint +
-                         "  Ctrl-C to stop (--push-to-talk disables this).", "2"))
+                         "  " + self.continuous_hint, "2"))
         failures = 0
         try:
             with _NoEcho():
@@ -265,6 +273,13 @@ class VoiceLoop:
             self._clear_line()
             self._out("")
             self._out(_paint("Stopped.", "2"))
+        finally:
+            # Stop the stdin watcher before returning, so it never competes with
+            # a host REPL's input() for the next line (the terminal's /voice).
+            if stop is not None:
+                stop.set()
+            if watcher is not None:
+                watcher.join(timeout=1.0)
 
     # ---- terminal helpers ---------------------------------------------------
     def _show_listening(self, enter: bool = False) -> None:
@@ -276,16 +291,50 @@ class VoiceLoop:
         if self._tty:
             self._out("\r\033[K", end="", flush=True)
 
-    def _start_enter_watcher(self, event: threading.Event) -> None:
-        """Set ``event`` whenever the user presses Enter (interactive TTY only)."""
-        def watch() -> None:
-            try:
-                while True:
-                    line = sys.stdin.readline()
-                    if line == "":  # stdin closed / EOF
-                        return
-                    event.set()
-            except Exception:
-                return
+    def _start_enter_watcher(self, event: threading.Event,
+                             stop: Optional[threading.Event] = None) -> "threading.Thread":
+        """Set ``event`` whenever the user presses Enter (interactive TTY only).
 
-        threading.Thread(target=watch, name="voice-enter", daemon=True).start()
+        Returns the watcher thread. When ``stop`` is given, the thread polls with
+        a short timeout and exits once it is set, so a host REPL can safely reuse
+        stdin after continuous listening ends.
+        """
+        def watch() -> None:
+            fd = None
+            try:
+                fd = sys.stdin.fileno()
+            except Exception:
+                fd = None
+            while not (stop is not None and stop.is_set()):
+                if fd is not None:
+                    # POSIX: wait for input without blocking forever, reading raw
+                    # bytes so a stop request is honoured within the timeout.
+                    try:
+                        import select as _select
+
+                        ready, _, _ = _select.select([fd], [], [], 0.1)
+                    except Exception:
+                        fd = None  # select unavailable: fall back to readline
+                        continue
+                    if not ready:
+                        continue
+                    try:
+                        data = os.read(fd, 4096)
+                    except OSError:
+                        return
+                    if not data:  # EOF
+                        return
+                    if b"\n" in data or b"\r" in data:
+                        event.set()
+                    continue
+                try:
+                    line = sys.stdin.readline()
+                except Exception:
+                    return
+                if line == "":  # stdin closed / EOF
+                    return
+                event.set()
+
+        thread = threading.Thread(target=watch, name="voice-enter", daemon=True)
+        thread.start()
+        return thread

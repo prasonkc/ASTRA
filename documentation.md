@@ -195,7 +195,8 @@ ASTRA/
 │   │   └── chat.py            # terminal REPL loop
 │   ├── controller/
 │   │   ├── session_controller.py    # /session, /s
-│   │   └── provider_controller.py   # /provider, /model, /thinking
+│   │   ├── provider_controller.py   # /provider, /model, /thinking
+│   │   └── voice_controller.py      # /voice — in-terminal speech (optional)
 │   ├── ai/
 │   │   ├── settings.py        # provider/model/key/thinking config
 │   │   ├── model.py           # AgentModel — the agent loop
@@ -333,10 +334,22 @@ the running agent). Control it with `ASTRA_BROWSER_BRIDGE=0` (off),
 (astra-web is running), the bridge stays off and the web server handles the
 requests instead.
 
+To talk to the running agent instead of typing, use the optional in-terminal
+speech command:
+
+```
+You: /voice          # continuous listening (Ctrl-C returns), needs the voice layer
+You: /voice status   # is whisper.cpp/piper available?
+```
+
+See [§12.12](#1212-terminal-voice-command).
+
 ### Run the voice app
 
 The optional voice wrapper adds a local speech layer (whisper.cpp for
-speech-to-text, piper for text-to-speech) and runs the same core in a voice loop:
+speech-to-text, piper for text-to-speech) and runs the same core in a voice loop
+— as a **separate process** (for speech *inside* the terminal, use `/voice`
+above):
 
 ```bash
 ./voice/astra-voice --setup          # one-time: fetch models, build whisper.cpp
@@ -708,14 +721,20 @@ Four lines; all logic lives in `Chat`.
 The terminal REPL and reference behaviour.
 
 - `Chat()` — construct `AgentModel`, `SessionController`,
-  `ProviderController`; exit (with a traceback) if the model cannot initialize.
+  `ProviderController` and `VoiceController`; exit (with a traceback) if the
+  model cannot initialize. A `_turn_lock` serializes turns between the REPL and
+  the browser bridge, which share one model/history.
 - `start()` — print the welcome banner + current model, then loop:
   - dispatch `/provider`, `/model`, `/thinking` to `ProviderController`;
   - dispatch `/session` or `/s ` to `SessionController`;
+  - dispatch `/voice` (and `/voice once|push|status|help`) to `VoiceController`
+    (optional; see [§12.12](#1212-terminal-voice-command));
   - otherwise stream `model.generate(user_input)`, rendering a thinking
     indicator (`.`, `..`, `...`) while reasoning tokens arrive, then the answer;
   - handle `exit`, EOF, Ctrl-C and unexpected errors gracefully;
   - `_cleanup()` on exit.
+- `_register_browser_message_handler()` / `_handle_browser_message()` — run a
+  turn for the extension popup under the same `_turn_lock`.
 - `_safe_input(prompt) -> str | None` — `input()` with EOF/Ctrl-C handling.
 - `_safe_show_current_session()` — best-effort current-session banner.
 - `_cleanup()` — `model.close()`.
@@ -875,10 +894,30 @@ Notes:
 - `/thinking` with no argument flips the current value; `ASTRA_THINKING` overrides
   it and the CLI says so.
 
-### 9.3 Slash commands vs. normal input
+### 9.3 `core/controller/voice_controller.py` — `VoiceController`
+
+Optional in-terminal speech (see [§12.12](#1212-terminal-voice-command)).
+Bridges the terminal's `AgentModel` to the shared `voice/` speech layer.
+
+| Command | Effect |
+|---------|--------|
+| `/voice` (`on`, `start`, `listen`) | Continuous listening; **Ctrl-C** returns to the prompt. |
+| `/voice once` (`one`, `single`) | Record one utterance, answer, return. |
+| `/voice push` (`ptt`, `talk`) | Push-to-talk sub-REPL (`q`/EOF/Ctrl-C exits). |
+| `/voice status` (`check`) | Print the `voice/` readiness report. |
+| `/voice help` (`-h`, `?`) | Print usage. |
+
+`handle(command)` dispatches by the first argument. The speech layer
+(`voice.backend.{config,audio,stt,tts,voice_loop}`) is imported lazily and the
+repository root is added to `sys.path`; if it is missing the command prints what
+to install instead of failing. `TerminalAgentAdapter` maps `AgentModel` streaming
+chunks to the voice loop's `on_delta`/`on_tool` callbacks and runs under the same
+`_turn_lock` as the REPL and browser bridge.
+
+### 9.4 Slash commands vs. normal input
 
 `agent/chat.py` only treats input starting with `/provider`, `/model`,
-`/thinking`, `/session` or `/s ` as commands. Everything else is sent to the
+`/thinking`, `/session`, `/s ` or `/voice` as commands. Everything else is sent to the
 model.
 
 ---
@@ -1336,6 +1375,12 @@ no new agent logic. Everything runs on-device. Full design in
 [`voice/ARCHITECTURE.md`](voice/ARCHITECTURE.md); usage in
 [`voice/README.md`](voice/README.md).
 
+It runs in two hosts, sharing the same speech modules:
+
+* **Standalone** — `./voice/astra-voice` (its own process; §12.1–12.11).
+* **In-terminal** — the built-in `/voice` command (§12.12), which drives the
+  terminal's own model and session.
+
 ```
 microphone ─▶ whisper.cpp (STT) ─▶ ASTRA agent ─▶ piper (TTS) ─▶ speaker
 ```
@@ -1454,6 +1499,44 @@ network-failure tolerant.
 | `ASTRA_VOICE_MAX_UTTERANCE` | `15` | max seconds for one utterance |
 | `ASTRA_VOICE_ENTER_SEND` | on | press Enter to send early (continuous mode) |
 | `ASTRA_VOICE_KEEP_AUDIO` | off | keep temporary WAVs |
+
+### 12.12 Terminal voice command
+
+The terminal can talk and listen without the standalone wrapper. Typed at the
+ASTRA prompt, `/voice` starts **continuous listening inside the terminal
+process** and drives the terminal's own `AgentModel`, so a spoken turn continues
+the same session/history that is already open (unlike the standalone wrapper,
+which is a separate process — see §19). Implemented in
+`core/controller/voice_controller.py` (see also §9.3).
+
+| Command | Effect |
+|---------|--------|
+| `/voice` | Continuous listening (default). Speak, then pause; **Ctrl-C** returns to the prompt. |
+| `/voice once` | Record one utterance, answer, return to the prompt. |
+| `/voice push` | Push-to-talk sub-REPL: Enter records, typing sends text, `q` quits. |
+| `/voice status` | Print the `voice/` readiness report. |
+| `/voice help` | Print usage. |
+
+Implementation:
+
+- `VoiceController.handle(command)` dispatches on the first argument (aliases in
+  §9.3).
+- The speech modules (`voice.backend.{config,deps,audio,stt,tts,voice_loop}`) are
+  imported **lazily** on first use, adding the repository root to `sys.path`
+  (the `voice` directory is a namespace package; its submodules use relative
+  imports, and nothing here imports the web service). A missing layer prints the
+  install hint instead of raising, so the normal text terminal is unaffected.
+- `_build_loop()` calls `deps.build_status()`; when the conversation is not
+  ready it lists the missing pieces. It builds `AudioIO`, `WhisperCppSTT`, and
+  `PiperTTS` (only when TTS is ready) exactly like `run.py`, then a `VoiceLoop`.
+- `TerminalAgentAdapter` implements the loop's agent API: `ask()` streams
+  `AgentModel.generate(prompt, on_event=…)` chunk content to `on_delta`, maps
+  `tool_call` events to `on_tool`, and returns `{reply, error, session_id}`;
+  `describe()` forwards the model's provider/model. It holds the same
+  `_turn_lock` the REPL and the browser bridge use, so the three never interleave.
+- `Ctrl-C` inside continuous mode is caught by `VoiceLoop.run_continuous()` and
+  returns to the prompt; the microphone/temp dir is released via
+  `loop.audio.cleanup()`.
 
 ---
 
@@ -1794,10 +1877,12 @@ maintainer.
   and several unused color/typing imports remain.
 - **Frontend duplication of session state.** `currentSessionId` is tracked
   client-side and on the server; recovery logic exists on both sides.
-- **Voice frontends are separate processes.** `voice/astra-voice` embeds the core
-  like `web/`; running it alongside the terminal or web app yields independent
-  in-memory sessions (they share only the SQLite history file). Run one frontend
-  at a time for a single live conversation.
+- **Voice frontends.** The standalone `voice/astra-voice` is a separate process
+  that embeds the core like `web/`; running it alongside the terminal or web app
+  yields independent in-memory sessions (they share only the SQLite history
+  file). The terminal's in-process `/voice` command does **not** have this
+  limitation — it drives the terminal's own session. For a single live
+  conversation, run one frontend at a time, or use the terminal plus `/voice`.
 - **Voice speech stack is not exercised by tests.** whisper.cpp/piper are
   external binaries invoked per turn; use `--status` and `--file` for manual
   verification.
@@ -1845,6 +1930,19 @@ a quiet mic, raise `ASTRA_VOICE_VAD_THRESHOLD` (e.g. `400`) or increase
 `ASTRA_VOICE_SILENCE`; press **Enter** to send early, or use `--push-to-talk` to
 skip endpoint detection entirely. `--status` shows which audio backend was
 selected.
+
+**`/voice` says the speech layer is unavailable, or `--status` shows missing
+pieces.** Run `./voice/astra-voice --setup` (or set `ASTRA_VOICE_WHISPER_BIN`,
+`ASTRA_VOICE_STT_MODEL`, `ASTRA_VOICE_PIPER_BIN`, `ASTRA_VOICE_TTS_MODEL`). The
+terminal `/voice` command uses the very same files and readiness check as the
+standalone wrapper, so `--status` is the single place to look.
+
+**Voice transcripts are wrong / repeat a canned phrase.** The transcript is
+whatever **whisper.cpp** heard. If you are testing with a stub `whisper-cli` on
+your `PATH` (or `ASTRA_VOICE_WHISPER_BIN` points at one), every utterance becomes
+that stub's fixed output — verify the real binary with
+`./voice/astra-voice --status` and a `--file clip.wav` run. The real whisper model
+only ever echoes your actual speech.
 
 ---
 

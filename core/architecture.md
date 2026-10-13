@@ -216,20 +216,39 @@ handlers = {
 ```python
 while True:
     user_input = input("You: ")
-    
+
     if user_input == "exit": break
     if user_input == "": continue
-    
+
+    # Provider / model / thinking commands
+    if user_input.startswith("/provider") or ...:
+        provider_controller.handle(user_input)
+        continue
+
     # Session commands
     if user_input.startswith("/session") or user_input.startswith("/s "):
         session_controller.handle(user_input)
         continue
-    
+
+    # Voice commands (optional; blocks while a voice session is active)
+    if user_input.strip() == "/voice" or user_input.strip().startswith("/voice "):
+        voice_controller.handle(user_input)
+        continue
+
     # Normal chat
-    response_stream = model.generate(user_input)
-    # ... stream response ...
-    model.add_response(content)
+    with self._turn_lock:                 # shared with the browser bridge
+        response_stream = model.generate(user_input)
+        # ... stream response ...
 ```
+
+**Voice (`/voice`).** `VoiceController` (`controller/voice_controller.py`) is an
+optional frontend that runs the local speech layer (`voice/backend`) in-process
+and drives this same `AgentModel`, so a spoken turn continues the current
+session. It is imported lazily; when the speech layer is absent the command
+prints what to install and the text REPL is unaffected. Continuous listening is
+the default (`/voice once`, `/voice push`, `/voice status`, `/voice help` also
+exist); **Ctrl-C** returns to the prompt. See `voice/README.md` and
+`documentation.md` §12.12.
 
 **Error Handling:**
 - Main loop wrapped in try/except
