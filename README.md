@@ -285,11 +285,79 @@ Copy these folders/files somewhere safe:
 
 ### Uninstall
 
+The quickest option:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/prasonkc/ASTRA/main/install.sh | bash -s -- --uninstall
 ```
 
 You will be asked to confirm. This deletes ASTRA, your chats, API keys, downloads, and models. Back up first if you need anything.
+
+#### Full uninstall script
+
+If you prefer to see exactly what will be removed — or you installed manually — save the script below as `uninstall.sh` and run it with `bash uninstall.sh`.
+
+It backs up your chats, settings, and generated files to `~/astra-backup-<date>` before deleting anything. Set `ASTRA_BACKUP=0` to skip the backup, or `ASTRA_HOME=/path/to/ASTRA` if you installed somewhere else.
+
+```bash
+#!/usr/bin/env bash
+# ASTRA uninstaller — removes the app, launchers, and shortcuts.
+set -euo pipefail
+
+INSTALL_DIR="${ASTRA_HOME:-$HOME/ASTRA}"
+BACKUP="${ASTRA_BACKUP:-1}"
+
+# Never delete something dangerous by mistake.
+case "$INSTALL_DIR" in
+  ""|"/"|"$HOME")
+    echo "Refusing to uninstall unsafe path: '${INSTALL_DIR}'" >&2
+    exit 1
+    ;;
+esac
+
+if [[ ! -d "$INSTALL_DIR" ]]; then
+  echo "ASTRA is not installed at: $INSTALL_DIR"
+  exit 0
+fi
+
+echo "ASTRA will be removed from: $INSTALL_DIR"
+echo "This deletes your chats, API keys, downloads, and speech models."
+read -r -p "Continue? [y/N] " answer
+case "$answer" in
+  [Yy]|[Yy][Ee][Ss]) ;;
+  *) echo "Cancelled. Nothing was deleted."; exit 0 ;;
+esac
+
+if [[ "$BACKUP" == "1" ]]; then
+  BACKUP_DIR="$HOME/astra-backup-$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$BACKUP_DIR"
+
+  # Save chats, long-term memory, settings/keys, and generated files.
+  [[ -d "$INSTALL_DIR/core/memory" ]] && cp -a "$INSTALL_DIR/core/memory" "$BACKUP_DIR/"
+  [[ -d "$INSTALL_DIR/core/config" ]] && cp -a "$INSTALL_DIR/core/config" "$BACKUP_DIR/"
+  [[ -d "$INSTALL_DIR/core/downloads" ]] && cp -a "$INSTALL_DIR/core/downloads" "$BACKUP_DIR/"
+
+  echo "Backup saved to: $BACKUP_DIR"
+  echo "Voice models are not backed up because they are large and easy to re-download."
+fi
+
+# Remove the install folder.
+rm -rf -- "$INSTALL_DIR"
+
+# Remove the commands created by the installer.
+rm -f -- "$HOME/.local/bin/astra" \
+          "$HOME/.local/bin/astra-terminal" \
+          "$HOME/.local/bin/astra-voice"
+
+# Remove desktop shortcuts.
+rm -f -- "$HOME/.local/share/applications/astra.desktop"
+rm -f -- "$HOME/Applications/ASTRA.command"
+rm -f -- "$HOME/Desktop/ASTRA.desktop"
+
+echo "ASTRA has been removed."
+echo "If you added ~/.local/bin to your PATH for ASTRA, you can remove that line"
+echo "from your shell startup file (search for 'ASTRA installer')."
+```
 
 ### Start ASTRA automatically (optional)
 
