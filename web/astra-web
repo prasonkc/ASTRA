@@ -38,7 +38,7 @@ fi
 REQ_CORE="${REPO_DIR}/requirements.txt"
 REQ_WEB="${SCRIPT_DIR}/requirements.txt"
 
-if ! "${PYTHON_BIN}" -c "import ollama" >/dev/null 2>&1; then
+if ! "${PYTHON_BIN}" -c "import ollama, playwright" >/dev/null 2>&1; then
   log "Installing core dependencies…"
   "${PYTHON_BIN}" -m pip install --quiet --upgrade pip
   [[ -f "${REQ_CORE}" ]] && "${PYTHON_BIN}" -m pip install --quiet -r "${REQ_CORE}"
